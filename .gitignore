@@ -1,0 +1,28 @@
+# 排除数据集文件夹
+nnrsfm_datasets/
+NRSfM_dataset/
+results/
+
+# 数据文件
+*.pth
+*.pt
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.tar
+*.gz
+*.zip
+
+# 日志和中间文件
+logs/
+checkpoints/
+runs/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# 环境配置
+.env
+.venv/
+venv/

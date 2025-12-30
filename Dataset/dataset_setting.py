@@ -2,8 +2,8 @@
 
 dataset_params = {
 ########################### Kinect T Shirt Dataset ###################################################
-    "results_base_folder" :"D:/NRSfM/NIPS2022_Yongbo/results",# "results/",
-    "preprocessed_W_filename" : "D:/NRSfM/NIPS2022_Yongbo/nnrsfm_datasets/KINECT_TSHIRT/measurement_matrix_W/W.txt",#"KINECT_TSHIRT/measurement_matrix_W/W.txt",
+    "results_base_folder" :"KINECT_TSHIRT",# "results/",
+    "preprocessed_W_filename" : "KINECT_TSHIRT/measurement_matrix_W/W.txt",#"KINECT_TSHIRT/measurement_matrix_W/W.txt",
 
     "dataset_size": 300,
     "point_tracks_used_for_rigid_init": 300,
@@ -16,6 +16,6 @@ dataset_params = {
 
     #"gt_images_location": "/KINECT_TSHIRT/seq/",
     #"gt_images_file" : "gt_files/gt_images_kinect_seq.txt",
-    "save_or_load" : "load" #"save"
+    "save_or_load" :  "save"#"load"
 #####################################################################################################
 }

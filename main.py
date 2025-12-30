@@ -1,5 +1,6 @@
 # This is a sample Python script.
 import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 import argparse
 import numpy as np
 #import scipy.io
@@ -23,9 +24,10 @@ import torch
 m = matlab.engine.start_matlab()
 
 def load_mat_dataset():
-    file_path="D:/NRSfM/NIPS2022_Yongbo/NRSfM_dataset/T_shirt/matlab.mat"
-    files = glob.glob('D:/NRSfM/NIPS2022_Yongbo/NRSfM_dataset/T_shirt/*.mat')
-    full_result_folder = os.path.join("D:/", "NRSfM/NIPS2022_Yongbo/nnrsfm_datasets/",dataset_params["results_base_folder"])
+    file_path="D:/NRSfM/NIPS2022_Yongbo/nnrsfm_datasets/KINECT_TSHIRT/mat_file/matlab.mat"
+    files = glob.glob('D:/NRSfM/NIPS2022_Yongbo/nnrsfm_datasets/KINECT_TSHIRT/mat_file/*.mat')
+    full_result_folder = os.path.join("D:/NRSfM/NIPS2022_Yongbo/results",dataset_params["results_base_folder"])
+    # 拼接完整的结果文件夹路径，将三个部分组合成一个路径
     try:
         os.mkdir(full_result_folder)
     except OSError:
@@ -33,11 +35,17 @@ def load_mat_dataset():
     else:
         print("Successfully created the directory %s " % full_result_folder)
     Scene_normalized, Scene_apoints, J = normalized_points_downsample_load(file_path)
-    return full_result_folder, Scene_normalized, Scene_apoints, J, files
+    # Scene_normalized: [F,2,N] 归一化的 (u,v)
+    # Scene_apoints:    [F,3,N] Ground truth 3D（如数据有）
+    # J: image warp 的一阶/二阶导数（用于局部微分约束）
+    np.save(os.path.join(full_result_folder, "Scene_normalized.npy"), Scene_normalized) #保存归一化的2D点
+    np.save(os.path.join(full_result_folder, "Pgth.npy"),Scene_apoints) #保存3D点
+    return full_result_folder, Scene_normalized, Scene_apoints, J, files #files根本没用
 
-def load_dataset():
+'''
+def load_dataset():#这才是完整的加载数据集函数，但是mat部分设置感觉有点问题
     # Create a folder to save reconstructed results
-    full_result_folder = os.path.join("D:/NRSfM/NIPS2022_Yongbo/nnrsfm_datasets/",dataset_params["results_base_folder"])
+    full_result_folder = os.path.join("D:/NRSfM/NIPS2022_Yongbo/results",dataset_params["results_base_folder"])
     try:
         os.mkdir(full_result_folder)
     except OSError:
@@ -59,8 +67,9 @@ def load_dataset():
         J=0
 
     return full_result_folder, W_normalized, W_np, J
+    '''
 
-def load_mat_all_dataset():
+def load_mat_all_dataset(): #纯 # 使用glob模块查找指定目录下所有的.mat文件，返回这些文件的路径列表
     files = glob.glob('D:/NRSfM/NIPS2022_Yongbo/NRSfM_dataset/**/*.mat')
     return files
 
@@ -75,21 +84,22 @@ if __name__ == '__main__':
 #    C1.backward()
 #    x.grad
 #    dH = torch.rand(3, 2)
+#   测试代码，用于测试PyTorch的梯度计算功能，创建张量、进行矩阵乘法、反向传播计算梯度
 
     #####################################################################################################
     # Parameters setting for learning
     parser = argparse.ArgumentParser(description='My first deep learning code for NRSfM')  # Input parameters
     parser.add_argument('--batch_size', type=int, default=2,help='Batch size')  # The batch size of the training network
     parser.add_argument('--gpus', type=int, default=1, help='The number of GPUs to use')  # GPU number
-    parser.add_argument('--epochs', type=int, default=10^4, help='Number of epochs')
-    parser.add_argument('--all_dataset', type=bool, default=False, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs')
+    parser.add_argument('--all_dataset', type=bool, default=False, help='whether use all dataset for training')
 
     args = parser.parse_args()  # Add input as parameters
     #####################################################################################################
     # GPU setting
     #config = tf.compat.v1.ConfigProto()
     #config.gpu_options.allow_growth = True
-    #sess = tf.compat.v1.Session(config=config)
+    #sess = tf.compat.v1.Session(config=config) tensorflow不用了
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     #####################################################################################################
@@ -104,13 +114,14 @@ if __name__ == '__main__':
     #point_3d= matlab.double(Scene_apoints[[0,1,2], :].tolist())
     #quv=m.fit_python(uv,point_3d,uv,nargout=1)
     #dqu=m.fit_python(uv,point_3d,uv,nargout=2)
-
+    # 注释掉的MATLAB接口调用代码，用于测试拟合函数,将Python数据转换为MATLAB格式并调用MATLAB函数
     #normalized_Image = matlab.double(self.normilized_point_batched[frame_idx, [0, 1], :].tolist())
+    # 注释掉的MATLAB数据转换代码，将Python数组转换为MATLAB格式的双精度数组
 
     points_3D_multiple = []
     y1_ground_multiple = []
     y2_ground_multiple = []
-    if file_names:
+    if file_names:#多文件处理
         for file_id in file_names:
             Scene_normalized, Scene_apoints, J = normalized_points_downsample_load(file_id)
             Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id, nargout=1))
@@ -143,15 +154,15 @@ if __name__ == '__main__':
 
 
     elif dataset_params["save_or_load"] == "load":
-        num_point_per_frame = Scene_normalized.shape[1]
-        shape_partial_derivate = []
-        num_control_points = num_point_per_frame
+        num_point_per_frame = Scene_normalized.shape[1]# 获取每帧的点数
+        shape_partial_derivate = []# 初始化模型列表
+        num_control_points = num_point_per_frame# 设置控制点数量
         shape_partial_derivate.append(DGCNNControlPoints(num_control_points, num_points=20, mode=0).to(device))
         shape_partial_derivate.append(DGCNNControlPoints(num_control_points, num_points=20, mode=0).to(device))
         shape_partial_derivate[0].load_state_dict(torch.load(PATH))
         shape_partial_derivate[1].load_state_dict(torch.load(PATH1))
         #shape_partial_derivate[0].eval()
-        #shape_partial_derivate[1].eval()
+        #shape_partial_derivate[1].eval()# 注释掉了模型评估模式设置
 
 
     if random_depth_data:

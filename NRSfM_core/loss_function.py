@@ -223,6 +223,7 @@ class NRSfMLoss:
         loss_subterm_distance_value = torch.zeros(1, 1).to(self.device)
 
         # Way 1 Get closed to mean value
+        '''
         for point_idx in range(self.num_points):
             for frame_idx in range(self.num_frames - 1):
                 point_difference1 = torch.unsqueeze(points_3D[frame_idx, :, point_idx],1).repeat(1,self.k)- points_3D[frame_idx, :, self.ID[point_idx, :]]
@@ -230,19 +231,22 @@ class NRSfMLoss:
                 dist0 = torch.sqrt(torch.sum(point_difference1 ** 2, 0))
                 dist1 = torch.sqrt(torch.sum(point_difference2 ** 2, 0))
                 loss_subterm_distance_value = loss_subterm_distance_value + torch.sum((dist1 - dist0) ** 2)
+       '''
 
-        # Way 2 Gets close to largest value with 3D points
-        '''point_difference1 = torch.zeros(self.num_frames, self.num_points, self.k, 3)
-        max_value = torch.zeros(1, self.num_points, self.k)
-        dist0 = torch.zeros(self.num_frames, self.num_points, self.k)
-        for point_idx in range(self.num_points):
-            for adjuest in range(self.k):
-                for frame_idx in range(self.num_frames):
-                    point_difference1[frame_idx, point_idx, adjuest,:] = torch.transpose(torch.unsqueeze(points_3D[frame_idx, :, point_idx], 1),1,0) - points_3D[frame_idx, :, self.ID[point_idx, adjuest]]
-                    dist0[frame_idx, point_idx, adjuest] = torch.sqrt(torch.sum(point_difference1[frame_idx, point_idx, adjuest, :] ** 2, 0))
-                max_value[0, point_idx, adjuest] = torch.max(dist0[:, point_idx, adjuest])
-        loss_subterm_distance_value = loss_subterm_distance_value + torch.sum((dist0 - max_value.repeat(self.num_frames, 1, 1))**2)'''
+        # Way 2 AMAP 版本：让每条邻边在所有帧上的长度，尽量逼近该邻边在“所有帧中的最大长度”（更贴近不可伸长/等距的凸松弛）
+        points_3D = torch.from_numpy(self.normilized_point_batched).to(self.device) * depth.repeat(1, 3, 1)
+        F, _, N = points_3D.shape
+        k = self.k
 
+        loss_subterm_distance_value = torch.zeros((), device=self.device)
+
+        ID = torch.tensor(self.ID, device=self.device, dtype=torch.long)  # [N,k]
+        for p in range(self.num_points):
+            nei = ID[p]                        # [k]
+            diffs = points_3D[:, :, p].unsqueeze(2) - points_3D[:, :, nei]   # [F,3,k]
+            dists = torch.sqrt(torch.sum(diffs ** 2, dim=1))                 # [F,k]
+            max_d = torch.max(dists, dim=0, keepdim=True)[0]                 # [1,k]
+            loss_subterm_distance_value += torch.sum((dists - max_d.repeat(F, 1)) ** 2)
 
         # Way 2 Gets close to largest value with 3D points (some bugs)
         '''point_difference1 = torch.zeros(self.num_frames, self.num_points, self.k, 3)

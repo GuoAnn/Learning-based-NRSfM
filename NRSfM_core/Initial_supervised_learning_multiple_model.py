@@ -177,4 +177,13 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
     print('accuracy: %.8f (u)  %.8f (v)' % (torch.sqrt(loss1)/torch.mean(torch.abs(y_result)),
                                         torch.sqrt(loss2)/torch.mean(torch.abs(y_result_latent))))
 
+    # 增加表1口径的 MAE/mean(|.|) 打印
+    with torch.no_grad():
+        mae_u = torch.mean(torch.abs(y_result - y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:]))
+        mae_v = torch.mean(torch.abs(y_result_latent - y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:]))
+        meanabs_u = torch.mean(torch.abs(y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:]))
+        meanabs_v = torch.mean(torch.abs(y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:]))
+        print('MAE: %.8f (u)  %.8f (v)' % (mae_u, mae_v))
+        print('MAE/meanabs: %.8f (u)  %.8f (v)' % (mae_u/meanabs_u, mae_v/meanabs_v))
+
     return  shape_partial_derivate, [] #, latent_space #shape_weights

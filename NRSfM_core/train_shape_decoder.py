@@ -7,7 +7,7 @@ import torch as to
 from NRSfM_core.loss_function import NRSfMLoss
 #from NRSfM_core.model_develop import learning_model
 from NRSfM_core.shape_decoder import ShapeDecoder, ShapeDecoder_DGNC
-from Result_evaluation.Shape_error import shape_error, shape_error_image
+from Result_evaluation.Shape_error import shape_error, shape_error_image,shape_error_save
 from NRSfM_core.GNN_model import Non_LinearGNN
 
 def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, model_derivation, device):
@@ -146,3 +146,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
     torch.save(depth, os.path.join(result_folder, "depth.pt"))
     ## View results
     error_reported[0, i] = shape_error_image(points_3D_result, Gth, m)
+
+    # 加：逐帧误差并保存
+    acc_f, est = shape_error_save(points_3D_result, Gth, m)
+    np.save(os.path.join(result_folder, "per_frame_error.npy"), acc_f.cpu().numpy())

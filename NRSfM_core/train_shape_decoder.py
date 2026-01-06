@@ -14,7 +14,7 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
     normilized_point_batched,normilized_point_batched_tensor=get_batched_W(normilized_point, device)
     num_frames=normilized_point_batched.shape[0]
     num_points = normilized_point_batched.shape[2]
-    num_iterations=100000
+    num_iterations=50 #100000
     kNN_degree=20
     ## Tensorfolow
     #shape_latent_code = tf.random.normal([num_frames,1], 0, 1, tf.float32, seed=1)
@@ -82,7 +82,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
     normilized_point_batched,normilized_point_batched_tensor=get_batched_W(normilized_point, device)
     num_frames=normilized_point_batched.shape[0]
     num_points = normilized_point_batched.shape[2]
-    num_iterations=5000
+    num_iterations=50 #5000
     kNN_degree=20
     shape_latent_code = to.zeros((num_frames, 1), requires_grad=True, dtype=torch.float32, device=device)
     network_model = "MLP"
@@ -110,7 +110,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
         shape_partial_derivate[1].train()
         shape_decoder.train()
         optimizer.zero_grad()
-        torch.cuda.empty_cache()
+        #torch.cuda.empty_cache() #可能会加重碎片化
         loss = all_loss_function.loss_all_GNC(shape_decoder, shape_latent_code, shape_partial_derivate, i, network_model, torch.tensor(Initial_shape, requires_grad=False, dtype=torch.float32).to(device))
         loss.backward()#retain_graph=True
         optimizer.step()

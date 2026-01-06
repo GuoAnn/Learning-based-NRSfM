@@ -1,6 +1,6 @@
 # This is a sample Python script.
 import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size_mb:128'
 import argparse
 import numpy as np
 #import scipy.io
@@ -134,7 +134,7 @@ if __name__ == '__main__':
         if dataset_params["save_or_load"] == "save":
             #Initial_shape = np.array(m.initialization_for_NRSfM_local_all(nargout=1))
             Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
-            shape_partial_derivate, random_depth_data = Initial_supervised_learning(Initial_shape, Scene_normalized, m, device, kNN_degree=20, num_iterations=1000, num_data=10) # Model parts: shape_partial_derivate and random_depth_data
+            shape_partial_derivate, random_depth_data = Initial_supervised_learning(Initial_shape, Scene_normalized, m, device, kNN_degree=20, num_iterations=10, num_data=2) # num_iterations=1000, num_data=10 Model parts: shape_partial_derivate and random_depth_data
             #shape_partial_derivate, random_depth_data = Initial_supervised_learning_DGCN(Initial_shape, Scene_normalized, m, kNN_degree=20, num_iterations=2) # Model parts: shape_partial_derivate and random_depth_data
         elif dataset_params["save_or_load"] == "load":
             Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))

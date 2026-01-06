@@ -166,9 +166,21 @@ class NRSfMLoss:
                 Depth1 = Depth.detach()  # Dete, if only using partial derivative, it will use lf-write backward  y_result_mark = ChamferFunction.apply(Depth, self.normilized_point_batched[frame_idx, :, :], m)
                 y_result_mark[frame_idx, :] = ChamferFunction.apply(Depth1,self.normilized_point_batched[frame_idx, :, :], m,self.device)
                 points_3D[frame_idx, :, :] = torch.from_numpy(self.normilized_point_batched[frame_idx, :, :]).to(self.device) * Depth.repeat(3, 1)
-            y_result = Shape_partial_derivate[0].forward(points_3D)
-            y_result_latent = Shape_partial_derivate[1].forward(points_3D)
-            y_result_final = torch.squeeze(torch.cat((y_result, y_result_latent), 1))
+            #y_result = Shape_partial_derivate[0].forward(points_3D)
+            #y_result_latent = Shape_partial_derivate[1].forward(points_3D)
+            #y_result_final = torch.squeeze(torch.cat((y_result, y_result_latent), 1))
+            y_result_list = []
+            y_result_latent_list = []
+            batch_frames = 4  # 可调：每次处理的帧数，显存吃紧就改为2
+            for s in range(0, self.num_frames, batch_frames):
+                e = min(s + batch_frames, self.num_frames)
+                y_result_list.append(Shape_partial_derivate[0].forward(points_3D[s:e, :, :]))
+                y_result_latent_list.append(Shape_partial_derivate[1].forward(points_3D[s:e, :, :]))
+
+            y_result = torch.cat(y_result_list, dim=0)               # [F, N]
+            y_result_latent = torch.cat(y_result_latent_list, dim=0) # [F, N]
+            y_result_final = torch.cat((y_result, y_result_latent), dim=1)  # [F, 2N]
+
             y1 = y_result
             y2 = y_result_latent
             loss_subterm_connection_value_1 = loss_subterm_connection_value_1 + self.approximate_weight * torch.sum(torch.square(y_result_final - y_result_mark))

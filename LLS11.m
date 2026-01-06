@@ -56,7 +56,16 @@ if algorithm
     end
 else
     %% Solve nonlinear least-squares (nonlinear data-fitting) problems (MATLAB, LM, trust region)
-    opts = optimoptions(@lsqnonlin,'SpecifyObjectiveGradient',true,'MaxIterations',40);%,'CheckGradients',true
+    opts = optimoptions(@lsqnonlin, ...
+    'Algorithm','levenberg-marquardt', ...    % LM 算法（仅限无边界时使用），小中型问题常更快
+    'SpecifyObjectiveGradient', true, ...     % 目标函数返回 [r, J]
+    'MaxIterations', 10, ...                  % 迭代次数更少
+    'MaxFunctionEvaluations', 200, ...        % 函数评估上限（避免另一种早停）
+    'FunctionTolerance', 1e-3, ...            % 函数容差（调松，加快结束）
+    'OptimalityTolerance', 1e-3, ...          % 最优性容差（调松）
+    'StepTolerance', 1e-6, ...                % 步长容差（适中）
+    'Display','none');                        % 关闭逐迭代输出，略微省时
+    %opts = optimoptions(@lsqnonlin,'SpecifyObjectiveGradient',true,'MaxIterations',40);%,'CheckGradients',true
     % opts.Algorithm = 'levenberg-marquardt';
     [X_update_k,resnorm,res,eflag,output2] = lsqnonlin(@(x)myfun1(x,J,normalized_Image,measurements,order),x0,[],[],opts);
     for i=1:1:size(order,2)

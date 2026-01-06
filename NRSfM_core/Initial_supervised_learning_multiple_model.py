@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import matlab.engine
+from torch.cuda.amp import autocast, GradScaler  # AMP 组件
 from NRSfM_core.GNN_model import Non_LinearGNN
 from NRSfM_core.model_develop_init import Fully_connection
 from NRSfM_core.new_DGCN_model import DGCNNControlPoints
@@ -17,11 +18,11 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
     #shape_partial_derivate.append(Non_LinearGNN(num_point_per_frame, device, feat_dim=5, stat_dim=3, iteration=1, degree=kNN_degree).to(device))
     #shape_partial_derivate.append(Non_LinearGNN(num_point_per_frame, device, feat_dim=5, stat_dim=3, iteration=1, degree=kNN_degree).to(device))
     num_control_points = num_point_per_frame
-    shape_partial_derivate.append(DGCNNControlPoints(num_control_points, num_points=20, mode=0).to(device))
-    shape_partial_derivate.append(DGCNNControlPoints(num_control_points, num_points=20, mode=0).to(device))
+    shape_partial_derivate.append(DGCNNControlPoints(num_control_points, num_points=12, mode=0).to(device)) #20
+    shape_partial_derivate.append(DGCNNControlPoints(num_control_points, num_points=12, mode=0).to(device)) #20
 
 ############
-    #for frame_idx in range(num_frames):
+    #for frame_idx in range(num_frames): #按帧循环追加多个模型的注释），为每个 frame 都实例化一套网络
     #    shape_partial_derivate.append(Non_LinearGNN(num_point_per_frame, device, feat_dim=5, stat_dim=3, iteration=1, degree=kNN_degree).to(device))
         #shape_partial_derivate.append(Fully_connection(num_point_per_frame*5, num_point_per_frame*2).to(device))
     ############
@@ -66,8 +67,9 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
     #    parameters_to_optimiza.append({"params":shape_partial_derivate[frame_idx].parameters()})
     #optimizer = torch.optim.Rprop(parameters_to_optimiza, lr=0.0001, step_sizes=(1e-10, 50))
     optimizer = torch.optim.Adam(parameters_to_optimiza, lr=0.0001)
+    scaler = GradScaler()  # AMP
     loss = torch.nn.MSELoss()#torch.nn.L1Loss()
-    batch_size = 12
+    batch_size = 2 #12
     num_train = num_data * num_frames
     for i in range(num_iterations):
         ## Training
@@ -84,7 +86,7 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
             loss1 = loss(y_result, y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
             loss2 = loss(y_result_latent, y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
             output = loss1  + loss2
-            output.backward(retain_graph=True)  # retain_graph=True
+            output.backward()  # retain_graph=True
             optimizer.step()
         shape_partial_derivate[0].eval()
         shape_partial_derivate[1].eval()
@@ -92,6 +94,8 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
 
         '''for i in range(num_iterations):
         ## Training
+        这是一个“非 mini-batch”的循环方案。逐 data_id 和 image_id 计算 points_3D、points_3D_latent，走一次大前向并用 latent_space 做除法后构造损失，再 backward。
+        特点：显存占用大、速度慢、图很复杂，且 retain_graph 的使用在这个思路里更加危险。
         optimizer.zero_grad()
         #y1_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
         #y2_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
@@ -132,6 +136,7 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
         #accuracy = torch.sum(((y1_predict_ref - y1_ground[0:8,:])**2+(y2_predict_ref - y2_ground[0:8,:])**2)).detach().to("cpu").numpy()
 
         '''        accuracy = []
+        作用：基于“参考前向”计算 y1/y2 的预测误差，作为准确度输出。
         for data_id in range(num_data):
             for image_id in range(num_frames):
                 points_3D_ref = normilized_point[image_id, [0, 1, 2], :] * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
@@ -158,7 +163,9 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
             #print(*accuracy, sep = ", ")
             print("\n")
 
-    '''y1_ground_accuracy = torch.zeros(num_frames, num_point_per_frame).to(device)
+    '''
+    作用：基于 Initial_shape 的 points_3D，重新跑一次拟合得到 y1_ground_accuracy/y2_ground_accuracy，再做 forward 得到评估。
+    y1_ground_accuracy = torch.zeros(num_frames, num_point_per_frame).to(device)
     y2_ground_accuracy = torch.zeros(num_frames, num_point_per_frame).to(device)
     #y_result_accuracy = torch.zeros(num_frames, num_point_per_frame).to(device)
     #y_result_latent_accuracy = torch.zeros(num_frames, num_point_per_frame).to(device)

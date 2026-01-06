@@ -6,6 +6,7 @@ import torch.nn.functional as F
 EPS = np.finfo(np.float32).eps
 
 
+'''
 def knn(x, k):
     batch_size = x.shape[0]
     indices = np.arange(0, k)
@@ -19,6 +20,29 @@ def knn(x, k):
         distances = torch.stack(distances, 0)
         distances = distances.squeeze(1)
         idx = distances.topk(k=k, dim=-1)[1][:, :, indices]
+    return idx'''
+
+def knn(x, k):
+    """
+    Compute kNN indices per batch on CPU to avoid large N×N GPU allocations.
+    x: [B, C, N]
+    return: idx [B, N, k] on x.device
+    """
+    device = x.device
+    B, C, N = x.shape
+    # 转 CPU，按批处理，避免大矩阵留在 GPU
+    x_cpu = x.detach().to('cpu').transpose(1, 2).contiguous()  # [B, N, C]
+
+    idx_list = []
+    with torch.no_grad():
+        for b in range(B):
+            # cdist 计算欧氏距离，返回 [N, N]
+            dist = torch.cdist(x_cpu[b], x_cpu[b], p=2)
+            # 取最小的 k 个（最近邻）
+            idx_b = dist.topk(k=k, dim=-1, largest=False).indices  # [N, k]
+            idx_list.append(idx_b.unsqueeze(0))  # [1, N, k]
+
+    idx = torch.cat(idx_list, dim=0).to(device)  # [B, N, k] 回到原设备
     return idx
 
 
@@ -46,7 +70,7 @@ def get_graph_feature(x, k=20, idx=None):
         import ipdb;
         ipdb.set_trace()
     feature = feature.view(batch_size, num_points, k, num_dims)
-    x = x.view(batch_size, num_points, 1, num_dims).repeat(1, 1, k, 1)
+    x = x.view(batch_size, num_points, 1, num_dims).expand(-1,-1,k,-1) #.repeat(1, 1, k, 1)
 
     feature = torch.cat((feature - x, x), dim=3).permute(0, 3, 1, 2)
 
@@ -64,7 +88,7 @@ class DGCNNControlPoints(nn.Module):
         """
         super(DGCNNControlPoints, self).__init__()
         self.k = num_points
-        self.mode = 3
+        self.mode = 0 #要改mode值改这里就可以了 0/3
         if self.mode == 0:
             self.bn1 = nn.BatchNorm2d(64)
             self.bn2 = nn.BatchNorm2d(64)
@@ -90,8 +114,8 @@ class DGCNNControlPoints(nn.Module):
 
             self.controlpoints = num_control_points
             self.conv6 = torch.nn.Conv1d(1024, 1024, 1)
-            self.conv7 = torch.nn.Conv1d(1024, 1024, 1)
-
+            self.conv7 = torch.nn.Conv1d(1024*2, 1024, 1)
+            #self.conv7 = torch.nn.Conv1d(1024, 1024, 1)
             # Predicts the entire control points grid.
             self.conv8 = torch.nn.Conv1d(1024,  self.controlpoints, 1)
 
@@ -128,8 +152,8 @@ class DGCNNControlPoints(nn.Module):
 
             self.controlpoints = num_control_points
             self.conv6 = torch.nn.Conv1d(1024, 1024, 1)
-            self.conv7 = torch.nn.Conv1d(1024, 1024, 1)
-
+            self.conv7 = torch.nn.Conv1d(1024*2, 1024, 1)
+            #self.conv7 = torch.nn.Conv1d(1024*2, 1024, 1)
             # Predicts the entire control points grid.
             self.conv8 = torch.nn.Conv1d(1024, 3 * (self.controlpoints ** 2), 1)
             self.bn6 = nn.BatchNorm1d(1024)
@@ -192,8 +216,10 @@ class DGCNNControlPoints(nn.Module):
         x = self.conv4(x)
         x4 = x.max(dim=-1, keepdim=False)[0]
 
-        #x = torch.cat((x1, x2, x3, x4), dim=1)
-        x = torch.cat((x0, x1, x2, x3, x4), dim=1)
+        if self.mode == 0:
+            x = torch.cat((x1, x2, x3, x4), dim=1)
+        else:
+            x = torch.cat((x0, x1, x2, x3, x4), dim=1)
 
         x = self.conv5(x)
 

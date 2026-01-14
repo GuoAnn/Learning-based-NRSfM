@@ -3,7 +3,6 @@ import numpy as np
 import scipy.io
 import trimesh
 import math
-import matlab.engine
 from NRSfM_core.KNN_graph import Graph_distance
 import open3d as o3d
 import torch
@@ -11,9 +10,17 @@ from NRSfM_core.shape_decoder import ShapeDecoder
 from NRSfM_core.class_autograd import ChamferFunction
 from torch.cuda.amp import autocast  # AMP
 
+# Optional MATLAB support for backward compatibility
+try:
+    import matlab.engine
+    MATLAB_AVAILABLE = True
+except ImportError:
+    MATLAB_AVAILABLE = False
+    matlab = None
+
 class NRSfMLoss:
 
-    def __init__(self, scene_normalized, num_points, J, m, device, degree, normilized_point):
+    def __init__(self, scene_normalized, num_points, J, m_or_smoothing, device, degree, normilized_point):
         self.num_frames = scene_normalized.shape[0]
         self.num_point_per_frame = scene_normalized.shape[2]
         self.normilized_point_batched = np.zeros(shape=(self.num_frames, 3, self.num_point_per_frame), dtype=np.float32)
@@ -32,7 +39,7 @@ class NRSfMLoss:
             else:
                 self.omega_CC_and_MC = 1
         self.omega_ARAP = 1
-        self.m = m
+        self.m_or_smoothing = m_or_smoothing
         if J != 0.:
             self.J = J
         else:
@@ -64,14 +71,14 @@ class NRSfMLoss:
         y1 = torch.zeros(self.num_frames, self.num_point_per_frame, device=self.device)
         y2 = torch.zeros(self.num_frames, self.num_point_per_frame, device=self.device)
         latent_space_const = torch.zeros(1, self.num_point_per_frame, device=self.device)
-        m = self.m
+        m_or_smoothing = self.m_or_smoothing
 
         if model_derivation:
             # 保持原逻辑（有导数模型时）
             for frame_idx in range(self.num_frames):
                 Depth = depth[frame_idx, :, :]
                 Depth1 = Depth.detach()
-                y_result_mark = ChamferFunction.apply(Depth1, self.normilized_point_batched[frame_idx, :, :], m, self.device)
+                y_result_mark = ChamferFunction.apply(Depth1, self.normilized_point_batched[frame_idx, :, :], m_or_smoothing, self.device)
 
                 points_3D = torch.from_numpy(self.normilized_point_batched[frame_idx, :, :]).to(self.device) * Depth.repeat(3, 1)
                 X_Node = torch.tensor(self.node_inds, device=self.device)
@@ -93,7 +100,7 @@ class NRSfMLoss:
             for frame_idx in range(self.num_frames):
                 Depth = depth[frame_idx, :, :]
                 Depth1 = Depth.detach()
-                y_result_mark[frame_idx, :] = ChamferFunction.apply(Depth1, self.normilized_point_batched[frame_idx, :, :], m, self.device)
+                y_result_mark[frame_idx, :] = ChamferFunction.apply(Depth1, self.normilized_point_batched[frame_idx, :, :], m_or_smoothing, self.device)
                 points_3D[frame_idx, :, :] = torch.from_numpy(self.normilized_point_batched[frame_idx, :, :]).to(self.device) * Depth.repeat(3, 1)
 
             # 预分配，直接填充，避免 list/cat 的峰值

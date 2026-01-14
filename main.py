@@ -4,7 +4,6 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 import argparse
 import numpy as np
 #import scipy.io
-import matlab.engine
 import glob
 # Press Shift+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
@@ -18,10 +17,21 @@ from NRSfM_core.Initial_supervised_learning_DGCN import Initial_supervised_learn
 from NRSfM_core.Initial_supervised_learning_multiple_model import Initial_supervised_learning
 from NRSfM_core.Collect_datasets import Collect_data, Initial_learning_from_all_datasets
 from NRSfM_core.new_DGCN_model import DGCNNControlPoints
+from NRSfM_core.initialization import initialization_wrapper
 
 import torch
 
-m = matlab.engine.start_matlab()
+# Optional MATLAB support
+try:
+    import matlab.engine
+    MATLAB_AVAILABLE = True
+except ImportError:
+    MATLAB_AVAILABLE = False
+    matlab = None
+    print("MATLAB engine not available. Running in Python-only mode.")
+
+# Global MATLAB engine (None if not using MATLAB)
+m = None
 
 def load_mat_dataset():
     file_path="D:/NRSfM/NIPS2022_Yongbo/nnrsfm_datasets/KINECT_TSHIRT/mat_file/matlab.mat"
@@ -93,8 +103,31 @@ if __name__ == '__main__':
     parser.add_argument('--gpus', type=int, default=1, help='The number of GPUs to use')  # GPU number
     parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs')
     parser.add_argument('--all_dataset', type=bool, default=False, help='whether use all dataset for training')
+    
+    # New arguments for Python-only mode
+    parser.add_argument('--backend', type=str, default='python', choices=['python', 'matlab'],
+                        help='Backend for spline fitting and evaluation (default: python)')
+    parser.add_argument('--spline-smoothing', type=float, default=1e-5,
+                        help='Smoothing parameter for spline fitting (default: 1e-5)')
+    parser.add_argument('--init-method', type=str, default='ones', 
+                        choices=['ones', 'random', 'mean_centered', 'affine'],
+                        help='Initialization method for depth (default: ones)')
+    parser.add_argument('--use-matlab-init', action='store_true',
+                        help='Use MATLAB initialization if available (requires MATLAB)')
 
     args = parser.parse_args()  # Add input as parameters
+    
+    # Initialize MATLAB engine if requested and available
+    if args.backend == 'matlab' or args.use_matlab_init:
+        if MATLAB_AVAILABLE:
+            print("Starting MATLAB engine...")
+            m = matlab.engine.start_matlab()
+            print("MATLAB engine started successfully.")
+        else:
+            print("Warning: MATLAB backend requested but not available. Falling back to Python.")
+            args.backend = 'python'
+            args.use_matlab_init = False
+    
     #####################################################################################################
     # GPU setting
     #config = tf.compat.v1.ConfigProto()
@@ -124,20 +157,38 @@ if __name__ == '__main__':
     if file_names:#多文件处理
         for file_id in file_names:
             Scene_normalized, Scene_apoints, J = normalized_points_downsample_load(file_id)
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id, nargout=1))
-            points_3D_all, y1_ground, y2_ground = Collect_data(Initial_shape, Scene_normalized, m, device, num_data=10)  # Model parts: shape_partial_derivate and random_depth_data
+            
+            # Initialize depth based on backend
+            if args.use_matlab_init and m is not None:
+                Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id, nargout=1))
+            else:
+                Initial_shape = initialization_wrapper(Scene_normalized, method=args.init_method)
+            
+            # Use appropriate backend for data collection
+            backend_param = m if (args.backend == 'matlab' and m is not None) else args.spline_smoothing
+            points_3D_all, y1_ground, y2_ground = Collect_data(Initial_shape, Scene_normalized, backend_param, device, num_data=10)  # Model parts: shape_partial_derivate and random_depth_data
             points_3D_multiple.append(points_3D_all)
             y1_ground_multiple.append(y1_ground)
             y2_ground_multiple.append(y2_ground)
 
     else:
         if dataset_params["save_or_load"] == "save":
-            #Initial_shape = np.array(m.initialization_for_NRSfM_local_all(nargout=1))
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
-            shape_partial_derivate, random_depth_data = Initial_supervised_learning(Initial_shape, Scene_normalized, m, device, kNN_degree=20, num_iterations=10, num_data=2) # num_iterations=1000, num_data=10 Model parts: shape_partial_derivate and random_depth_data
+            # Initialize depth based on backend
+            if args.use_matlab_init and m is not None:
+                Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+            else:
+                Initial_shape = initialization_wrapper(Scene_normalized, method=args.init_method)
+            
+            # Use appropriate backend for supervised learning
+            backend_param = m if (args.backend == 'matlab' and m is not None) else args.spline_smoothing
+            shape_partial_derivate, random_depth_data = Initial_supervised_learning(Initial_shape, Scene_normalized, backend_param, device, kNN_degree=20, num_iterations=10, num_data=2) # num_iterations=1000, num_data=10 Model parts: shape_partial_derivate and random_depth_data
             #shape_partial_derivate, random_depth_data = Initial_supervised_learning_DGCN(Initial_shape, Scene_normalized, m, kNN_degree=20, num_iterations=2) # Model parts: shape_partial_derivate and random_depth_data
         elif dataset_params["save_or_load"] == "load":
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+            # Initialize depth based on backend
+            if args.use_matlab_init and m is not None:
+                Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+            else:
+                Initial_shape = initialization_wrapper(Scene_normalized, method=args.init_method)
             random_depth_data = []
 
     PATH = os.path.join(full_result_folder,"0/model.pth")
@@ -166,8 +217,10 @@ if __name__ == '__main__':
 
 
     if random_depth_data:
-        train_shape_decoder(full_result_folder, Scene_normalized, args, J, m, Initial_shape, Scene_apoints, shape_partial_derivate, random_depth_data, device)
+        backend_param = m if (args.backend == 'matlab' and m is not None) else args.spline_smoothing
+        train_shape_decoder(full_result_folder, Scene_normalized, args, J, backend_param, Initial_shape, Scene_apoints, shape_partial_derivate, random_depth_data, device)
     else:
-        train_shape_decoder_GCN(full_result_folder, Scene_normalized, args, J, m, Initial_shape, Scene_apoints, shape_partial_derivate, device)
+        backend_param = m if (args.backend == 'matlab' and m is not None) else args.spline_smoothing
+        train_shape_decoder_GCN(full_result_folder, Scene_normalized, args, J, backend_param, Initial_shape, Scene_apoints, shape_partial_derivate, device)
     #
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/

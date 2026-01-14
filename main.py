@@ -4,7 +4,17 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 import argparse
 import numpy as np
 #import scipy.io
-import matlab.engine
+
+# Make MATLAB import optional
+try:
+    import matlab.engine
+    MATLAB_AVAILABLE = True
+    print("MATLAB engine is available.")
+except ImportError:
+    MATLAB_AVAILABLE = False
+    matlab = None
+    print("MATLAB engine is NOT available. Running in Python-only mode.")
+
 import glob
 # Press Shift+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
@@ -18,10 +28,21 @@ from NRSfM_core.Initial_supervised_learning_DGCN import Initial_supervised_learn
 from NRSfM_core.Initial_supervised_learning_multiple_model import Initial_supervised_learning
 from NRSfM_core.Collect_datasets import Collect_data, Initial_learning_from_all_datasets
 from NRSfM_core.new_DGCN_model import DGCNNControlPoints
+from NRSfM_core.initialization import initialization_for_NRSfM_local_all_new, initialization_simple
 
 import torch
 
-m = matlab.engine.start_matlab()
+# Start MATLAB engine only if available
+m = None
+if MATLAB_AVAILABLE:
+    try:
+        m = matlab.engine.start_matlab()
+        print("MATLAB engine started successfully.")
+    except Exception as e:
+        print(f"Warning: Failed to start MATLAB engine: {e}")
+        print("Continuing in Python-only mode.")
+        MATLAB_AVAILABLE = False
+        m = None
 
 def load_mat_dataset():
     file_path="D:/NRSfM/NIPS2022_Yongbo/nnrsfm_datasets/KINECT_TSHIRT/mat_file/matlab.mat"
@@ -124,7 +145,16 @@ if __name__ == '__main__':
     if file_names:#多文件处理
         for file_id in file_names:
             Scene_normalized, Scene_apoints, J = normalized_points_downsample_load(file_id)
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id, nargout=1))
+            # Use Python or MATLAB initialization
+            if m is not None and MATLAB_AVAILABLE:
+                Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id, nargout=1))
+            else:
+                print(f"Using Python initialization for {file_id}...")
+                Initial_shape = initialization_for_NRSfM_local_all_new(file_id, J)
+                if Initial_shape is None or Initial_shape.size == 0:
+                    print("Falling back to simple initialization...")
+                    Initial_shape = initialization_simple(Scene_normalized, initial_depth=1.0)
+            
             points_3D_all, y1_ground, y2_ground = Collect_data(Initial_shape, Scene_normalized, m, device, num_data=10)  # Model parts: shape_partial_derivate and random_depth_data
             points_3D_multiple.append(points_3D_all)
             y1_ground_multiple.append(y1_ground)
@@ -133,11 +163,30 @@ if __name__ == '__main__':
     else:
         if dataset_params["save_or_load"] == "save":
             #Initial_shape = np.array(m.initialization_for_NRSfM_local_all(nargout=1))
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+            # Use Python or MATLAB initialization depending on availability
+            if m is not None and MATLAB_AVAILABLE:
+                Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+            else:
+                print("Using Python initialization...")
+                # Use Python initialization
+                Initial_shape = initialization_for_NRSfM_local_all_new(file_id[0], J)
+                if Initial_shape is None or Initial_shape.size == 0:
+                    # Fallback to simple initialization
+                    print("Falling back to simple uniform initialization...")
+                    Initial_shape = initialization_simple(Scene_normalized, initial_depth=1.0)
+            
             shape_partial_derivate, random_depth_data = Initial_supervised_learning(Initial_shape, Scene_normalized, m, device, kNN_degree=20, num_iterations=10, num_data=2) # num_iterations=1000, num_data=10 Model parts: shape_partial_derivate and random_depth_data
             #shape_partial_derivate, random_depth_data = Initial_supervised_learning_DGCN(Initial_shape, Scene_normalized, m, kNN_degree=20, num_iterations=2) # Model parts: shape_partial_derivate and random_depth_data
         elif dataset_params["save_or_load"] == "load":
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+            # Use Python or MATLAB initialization depending on availability
+            if m is not None and MATLAB_AVAILABLE:
+                Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+            else:
+                print("Using Python initialization...")
+                Initial_shape = initialization_for_NRSfM_local_all_new(file_id[0], J)
+                if Initial_shape is None or Initial_shape.size == 0:
+                    print("Falling back to simple uniform initialization...")
+                    Initial_shape = initialization_simple(Scene_normalized, initial_depth=1.0)
             random_depth_data = []
 
     PATH = os.path.join(full_result_folder,"0/model.pth")

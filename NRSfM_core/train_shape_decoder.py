@@ -10,7 +10,7 @@ from NRSfM_core.shape_decoder import ShapeDecoder, ShapeDecoder_DGNC
 from Result_evaluation.Shape_error import shape_error, shape_error_image,shape_error_save
 from NRSfM_core.GNN_model import Non_LinearGNN
 
-def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, model_derivation, device):
+def train_shape_decoder(result_folder, normilized_point, args, J, m_or_backend, Initial_shape, Gth, model_shape, model_derivation, device):
     normilized_point_batched,normilized_point_batched_tensor=get_batched_W(normilized_point, device)
     num_frames=normilized_point_batched.shape[0]
     num_points = normilized_point_batched.shape[2]
@@ -28,7 +28,7 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
     #shape_partial_derivate = Non_LinearGNN(num_points, feat_dim=3, stat_dim=3, iteration=5, degree=kNN_degree)
     shape_partial_derivate = model_shape
     ################################ Learning Model Initialization################################
-    all_loss_function = NRSfMLoss(normilized_point_batched, num_points, J, m, device, degree=kNN_degree, normilized_point=normilized_point) # degree is the
+    all_loss_function = NRSfMLoss(normilized_point_batched, num_points, J, m_or_backend, device, degree=kNN_degree, normilized_point=normilized_point) # degree is the
     ################################ Initial loss################################
     #loss_f0 = all_loss_function.loss_all(shape_decoder, shape_latent_code, shape_partial_derivate, model_derivation)
     ######################### Trainning ################################
@@ -180,7 +180,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
         normilized_point_batched,
         num_points,
         J,
-        m,
+        m_or_backend,
         device,
         degree=kNN_degree,
         normilized_point=normilized_point
@@ -234,7 +234,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
                 normilized_point_result[frame_idx, 2, :] = np.ones(depth.shape[2])
 
             points_3D_result = normilized_point_result * depth.detach().cpu().numpy().repeat(3, 1)
-            error_reported[0, i] = shape_error(points_3D_result, Gth, m)
+            error_reported[0, i] = shape_error(points_3D_result, Gth, m_or_backend)
 
         if i % 3 == 2:
             print('[%5d, %5d] loss: %.3f accuracy: %.6f' % (i + 1, num_iterations, float(loss.detach().cpu()), error_reported[0, i]))
@@ -243,8 +243,8 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
     torch.save(shape_latent_code.detach().cpu(), os.path.join(result_folder, "shape_latent_code.pt"))
     torch.save(depth.detach().cpu(), os.path.join(result_folder, "depth.pt"))
 
-    error_reported[0, i] = shape_error_image(points_3D_result, Gth, m)
-    acc_f, est = shape_error_save(points_3D_result, Gth, m)
+    error_reported[0, i] = shape_error_image(points_3D_result, Gth, m_or_backend)
+    acc_f, est = shape_error_save(points_3D_result, Gth, m_or_backend)
     np.save(os.path.join(result_folder, "per_frame_error.npy"), acc_f.cpu().numpy())
 
     return 1

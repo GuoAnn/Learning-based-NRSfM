@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import matlab.engine
 from NRSfM_core.GNN_model import Non_LinearGNN
 from NRSfM_core.model_develop_init import Fully_connection
 from NRSfM_core.KNN_graph import Graph_distance
@@ -18,6 +17,14 @@ from NRSfM_core.loss_DGCN import (
     laplacian_loss,
 )
 from NRSfM_core.dataset import (DataSetControlPointsPoisson, generator_iter)
+
+# Optional MATLAB support
+try:
+    import matlab.engine
+    MATLAB_AVAILABLE = True
+except ImportError:
+    MATLAB_AVAILABLE = False
+    matlab = None
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 

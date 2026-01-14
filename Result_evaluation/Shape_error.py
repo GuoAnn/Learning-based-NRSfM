@@ -21,7 +21,6 @@ from Result_evaluation.Shape_error_python import (
 
 
 def shape_error(Estimation_all, Groundtruth_all, m_or_backend='python'):
-def shape_error(Estimation_all, Groundtruth_all, m_or_backend='python'):
     """
     Compute shape error with support for both Python and MATLAB backends.
     
@@ -47,7 +46,6 @@ def shape_error(Estimation_all, Groundtruth_all, m_or_backend='python'):
 
 
 def view_shape(Shape_A, Shape_B, m_or_backend='python'):
-def view_shape(Shape_A, Shape_B, m_or_backend='python'):
     """
     Compute error between two shapes with backend support.
     
@@ -68,7 +66,6 @@ def view_shape(Shape_A, Shape_B, m_or_backend='python'):
         return view_shape_python(Shape_A, Shape_B)
 
 
-def shape_error_image(Estimation_all, Groundtruth_all, m_or_backend='python'):
 def shape_error_image(Estimation_all, Groundtruth_all, m_or_backend='python'):
     """
     Compute shape error with image visualization (backend-aware).
@@ -92,7 +89,6 @@ def shape_error_image(Estimation_all, Groundtruth_all, m_or_backend='python'):
 
 
 def view_shape_image(Shape_A, Shape_B, m_or_backend='python'):
-def view_shape_image(Shape_A, Shape_B, m_or_backend='python'):
     """
     Compute error with image visualization (backend-aware).
     
@@ -113,7 +109,6 @@ def view_shape_image(Shape_A, Shape_B, m_or_backend='python'):
         return view_shape_image_python(Shape_A, Shape_B)
 
 
-def shape_error_save(Estimation_all, Groundtruth_all, m_or_backend='python'):
 def shape_error_save(Estimation_all, Groundtruth_all, m_or_backend='python'):
     """
     Compute per-frame errors and return for saving (backend-aware).

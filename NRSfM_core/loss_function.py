@@ -3,7 +3,13 @@ import numpy as np
 import scipy.io
 import trimesh
 import math
-import matlab.engine
+# Make MATLAB import optional
+try:
+    import matlab.engine
+    MATLAB_AVAILABLE = True
+except ImportError:
+    MATLAB_AVAILABLE = False
+    matlab = None
 from NRSfM_core.KNN_graph import Graph_distance
 import open3d as o3d
 import torch

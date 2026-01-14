@@ -16,6 +16,6 @@ dataset_params = {
 
     #"gt_images_location": "/KINECT_TSHIRT/seq/",
     #"gt_images_file" : "gt_files/gt_images_kinect_seq.txt",
-    "save_or_load" :  "save"#"load"
+    "save_or_load" :  "load"#"save"
 #####################################################################################################
 }

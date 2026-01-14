@@ -80,12 +80,13 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
         #output = torch.zeros(1).to(device)
         for train_batch_id in range(num_train // batch_size):
             optimizer.zero_grad()
-            torch.cuda.empty_cache()
-            y_result = shape_partial_derivate[0].forward(points_3D_all[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:,:])
-            y_result_latent = shape_partial_derivate[1].forward(points_3D_all[train_batch_id * batch_size:(train_batch_id + 1) * batch_size, :, :])
-            loss1 = loss(y_result, y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
-            loss2 = loss(y_result_latent, y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
-            output = loss1  + loss2
+            #torch.cuda.empty_cache()
+            with autocast():  # AMP
+                y_result = shape_partial_derivate[0].forward(points_3D_all[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:,:])
+                y_result_latent = shape_partial_derivate[1].forward(points_3D_all[train_batch_id * batch_size:(train_batch_id + 1) * batch_size, :, :])
+                loss1 = loss(y_result, y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
+                loss2 = loss(y_result_latent, y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
+                output = loss1  + loss2
             output.backward()  # retain_graph=True
             optimizer.step()
         shape_partial_derivate[0].eval()
@@ -159,7 +160,8 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
                 '''
 
         if i % 3 == 2:  # print every 3 iterations
-            print('[%5d, %5d] loss: %.6f' % (i + 1, num_iterations, output.data))
+            #print('[%5d, %5d] loss: %.6f' % (i + 1, num_iterations, output.data))
+            print('[%5d, %5d] loss: %.6f' % (i + 1, num_iterations, float(output.detach().cpu())))
             #print(*accuracy, sep = ", ")
             print("\n")
 

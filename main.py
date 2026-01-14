@@ -1,6 +1,6 @@
 # This is a sample Python script.
 import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,max_split_size_mb:128'
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 import argparse
 import numpy as np
 #import scipy.io

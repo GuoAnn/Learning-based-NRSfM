@@ -1,6 +1,12 @@
 import numpy as np
 import torch
-import matlab.engine
+# Make MATLAB optional
+try:
+    import matlab.engine
+    MATLAB_AVAILABLE = True
+except ImportError:
+    MATLAB_AVAILABLE = False
+    matlab = None
 from NRSfM_core.GNN_model import Non_LinearGNN
 from NRSfM_core.model_develop_init import Fully_connection
 from NRSfM_core.KNN_graph import Graph_distance

@@ -16,10 +16,10 @@ function compile
 
 debug = 0;
 nthreads = 4;
-cpp_flags = '/openmp /O2 /favor:EM64T';
+cpp_flags = '-fopenmp -O2 ';
 mex_opts = '-largeArrayDims';
 
-delete *.obj
+delete *.o
 delete *.mex*
 delete *.pdb
 delete *.ilk
@@ -35,10 +35,10 @@ for ii = 1:numel(files)
     eval(sprintf('mex -g -c %s COMPFLAGS="$COMPFLAGS %s -DNTHREADS=%d" %s', mex_opts, cpp_flags, nthreads, files{ii}))
 end
 
-mex bbs_normalize.obj bbs.obj bbs_mex.obj
-mex bbs_eval.obj bbs.obj bbs_mex.obj
-mex bbs_coloc.obj bbs.obj bbs_mex.obj
-mex bbs_coloc_deriv.obj bbs.obj bbs_mex.obj
-mex bbs_bending_ur.obj bbs.obj bbs_mex.obj
+mex bbs_normalize.o bbs.o bbs_mex.o
+mex bbs_eval.o bbs.o bbs_mex.o
+mex bbs_coloc.o bbs.o bbs_mex.o
+mex bbs_coloc_deriv.o bbs.o bbs_mex.o
+mex bbs_bending_ur.o bbs.o bbs_mex.o
 
-delete *.o
+%delete *.o

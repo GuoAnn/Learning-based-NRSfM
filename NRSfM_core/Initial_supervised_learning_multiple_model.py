@@ -1,12 +1,14 @@
 import numpy as np
 import torch
 import matlab.engine
+import os  # [Added]
 from NRSfM_core.GNN_model import Non_LinearGNN
 from NRSfM_core.model_develop_init import Fully_connection
 from NRSfM_core.new_DGCN_model import DGCNNControlPoints
 from NRSfM_core.KNN_graph import Graph_distance
 
-def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, device, kNN_degree, num_iterations, num_data):
+# [Modified] Function signature updated to include resume and checkpoint_dir
+def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, device, kNN_degree, num_iterations, num_data, resume=False, checkpoint_dir=None):
 ##############################parameters##############################################################
     omega = 0.1
     num_frames = normilized_point_batched.shape[0] // 2
@@ -67,96 +69,136 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
     #optimizer = torch.optim.Rprop(parameters_to_optimiza, lr=0.0001, step_sizes=(1e-10, 50))
     optimizer = torch.optim.Adam(parameters_to_optimiza, lr=0.0001)
     loss = torch.nn.MSELoss()#torch.nn.L1Loss()
-    batch_size = 12
+    batch_size = 16
     num_train = num_data * num_frames
-    for i in range(num_iterations):
-        ## Training
-        shape_partial_derivate[0].train()
-        shape_partial_derivate[1].train()
-        # y1_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
-        # y2_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
-        #output = torch.zeros(1).to(device)
-        for train_batch_id in range(num_train // batch_size):
+
+    # [Added] Resume Logic
+    start_iter = 0
+    ckpt_path = os.path.join(checkpoint_dir, "ckpt_network1_latest.pth") if checkpoint_dir else "ckpt_network1_latest.pth"
+
+    if resume and os.path.exists(ckpt_path):
+        print(f"Resuming Network 1 from {ckpt_path}...")
+        checkpoint = torch.load(ckpt_path, map_location=device)
+        shape_partial_derivate[0].load_state_dict(checkpoint['net0_state_dict'])
+        shape_partial_derivate[1].load_state_dict(checkpoint['net1_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_iter = checkpoint['iteration'] + 1
+        print(f"Resumed from iteration {start_iter}")
+
+    try:
+        for i in range(start_iter, num_iterations):
+            ## Training
+            shape_partial_derivate[0].train()
+            shape_partial_derivate[1].train()
+            # y1_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
+            # y2_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
+            #output = torch.zeros(1).to(device)
+            for train_batch_id in range(num_train // batch_size):
+                optimizer.zero_grad()
+                #torch.cuda.empty_cache()
+                y_result = shape_partial_derivate[0].forward(points_3D_all[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:,:])
+                y_result_latent = shape_partial_derivate[1].forward(points_3D_all[train_batch_id * batch_size:(train_batch_id + 1) * batch_size, :, :])
+                loss1 = loss(y_result, y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
+                loss2 = loss(y_result_latent, y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
+                output = loss1  + loss2
+                output.backward()  # retain_graph=True
+                optimizer.step()
+            shape_partial_derivate[0].eval()
+            shape_partial_derivate[1].eval()
+
+
+            '''for i in range(num_iterations):
+            ## Training
             optimizer.zero_grad()
-            torch.cuda.empty_cache()
-            y_result = shape_partial_derivate[0].forward(points_3D_all[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:,:])
-            y_result_latent = shape_partial_derivate[1].forward(points_3D_all[train_batch_id * batch_size:(train_batch_id + 1) * batch_size, :, :])
-            loss1 = loss(y_result, y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
-            loss2 = loss(y_result_latent, y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
-            output = loss1  + loss2
+            #y1_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
+            #y2_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
+            output=torch.zeros(1).to(device)
+            for data_id in range(num_data):
+                for image_id in range(num_frames):
+                    points_3D = normilized_point[image_id, [0, 1, 2], :] * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
+                    points_3D_latent = (normilized_point[image_id, [0, 1, 2], :] + torch.cat((latent_space[[0, 1],:], latent_space_const),0)) * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
+                    #y_result = shape_partial_derivate.forward(X_Node, X_Neis, points_3D)
+                    y_result = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0))
+
+                    y_result_latent = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 2
+                    ###################
+                    #y_result = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0))
+                    #y_result_latent = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 2
+                    ###################
+                    # y_result_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D + points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 1
+                    #y_result_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D + points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 3
+
+                    #y_result = shape_partial_derivate.forward(torch.flatten(torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0)))
+                    #good y_result = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
+                    #good y_result_latent = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
+                    #y1_predict[data_id*num_frames+image_id, :] = y_result[:num_point_per_frame]
+                    #y2_predict[data_id*num_frames+image_id, :] = y_result[num_point_per_frame:]
+                    loss1 = loss((y_result_latent[:num_point_per_frame]-y_result[:num_point_per_frame])/latent_space[0,:], y1_ground[data_id*num_frames+image_id, :])
+                    loss2 = loss((y_result_latent[num_point_per_frame:]-y_result[num_point_per_frame:])/latent_space[1,:], y2_ground[data_id*num_frames+image_id, :])
+                    output = loss1  + output + loss2
+
+            #loss2 = loss(y2_predict, y2_ground)
+
             output.backward(retain_graph=True)  # retain_graph=True
-            optimizer.step()
-        shape_partial_derivate[0].eval()
-        shape_partial_derivate[1].eval()
-
-
-        '''for i in range(num_iterations):
-        ## Training
-        optimizer.zero_grad()
-        #y1_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
-        #y2_predict = torch.zeros(num_data * num_frames, num_point_per_frame)
-        output=torch.zeros(1).to(device)
-        for data_id in range(num_data):
-            for image_id in range(num_frames):
-                points_3D = normilized_point[image_id, [0, 1, 2], :] * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
-                points_3D_latent = (normilized_point[image_id, [0, 1, 2], :] + torch.cat((latent_space[[0, 1],:], latent_space_const),0)) * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
-                #y_result = shape_partial_derivate.forward(X_Node, X_Neis, points_3D)
-                y_result = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0))
-
-                y_result_latent = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 2
-                ###################
-                #y_result = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0))
-                #y_result_latent = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 2
-                ###################
-                # y_result_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D + points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 1
-                #y_result_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D + points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0))#Way 3
-
-                #y_result = shape_partial_derivate.forward(torch.flatten(torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0)))
-                #good y_result = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
-                #good y_result_latent = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D_latent, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
-                #y1_predict[data_id*num_frames+image_id, :] = y_result[:num_point_per_frame]
-                #y2_predict[data_id*num_frames+image_id, :] = y_result[num_point_per_frame:]
-                loss1 = loss((y_result_latent[:num_point_per_frame]-y_result[:num_point_per_frame])/latent_space[0,:], y1_ground[data_id*num_frames+image_id, :])
-                loss2 = loss((y_result_latent[num_point_per_frame:]-y_result[num_point_per_frame:])/latent_space[1,:], y2_ground[data_id*num_frames+image_id, :])
-                output = loss1  + output + loss2
-
-        #loss2 = loss(y2_predict, y2_ground)
-
-        output.backward(retain_graph=True)  # retain_graph=True
-        optimizer.step()'''
+            optimizer.step()'''
 
 
 
-        #y1_predict_ref = shape_partial_derivate[0].forward(points_3D_all[0:8, :, :])
-        #y2_predict_ref = shape_partial_derivate[1].forward(points_3D_all[0:8, :, :])
-        #accuracy = torch.sum(((y1_predict_ref - y1_ground[0:8,:])**2+(y2_predict_ref - y2_ground[0:8,:])**2)).detach().to("cpu").numpy()
+            #y1_predict_ref = shape_partial_derivate[0].forward(points_3D_all[0:8, :, :])
+            #y2_predict_ref = shape_partial_derivate[1].forward(points_3D_all[0:8, :, :])
+            #accuracy = torch.sum(((y1_predict_ref - y1_ground[0:8,:])**2+(y2_predict_ref - y2_ground[0:8,:])**2)).detach().to("cpu").numpy()
 
-        '''        accuracy = []
-        for data_id in range(num_data):
-            for image_id in range(num_frames):
-                points_3D_ref = normilized_point[image_id, [0, 1, 2], :] * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
-                points_3D_ref_latent = (normilized_point[image_id, [0, 1, 2], :] + torch.cat((latent_space[[0, 1],:], latent_space_const),0)) * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
-                y_result_ref = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D_ref, normilized_point[image_id, [0, 1], :]), 0))
-                y_result_ref_latent = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D_ref_latent, normilized_point[image_id, [0, 1], :]), 0))#Way 1
-                ###################
-                #y_result_ref = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D_ref, normilized_point[image_id, [0, 1], :]), 0))
-                #y_result_ref_latent = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D_ref_latent, normilized_point[image_id, [0, 1], :]), 0))#Way 1
-                ###############
-                #y_result_ref_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D_ref_latent, normilized_point[0, [0, 1], :]), 0))#Way 2
-                #y_result_ref_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D_ref+points_3D_ref_latent, normilized_point[0, [0, 1], :]), 0))#Way 2
-                #y_result_ref = shape_partial_derivate.forward(X_Node, X_Neis, points_3D_ref)
-                #y_result_ref = shape_partial_derivate.forward( torch.flatten(points_3D_ref))
-                #y_result_ref = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D_ref, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
-                #y_result_ref_latent = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D_ref_latent, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
-                y1_predict_ref = (y_result_ref_latent[:num_point_per_frame]-y_result_ref[:num_point_per_frame])/latent_space[0,:]
-                y2_predict_ref = (y_result_ref_latent[num_point_per_frame:]-y_result_ref[num_point_per_frame:])/latent_space[1,:]
-                accuracy.append(torch.sum(((y1_predict_ref - y1_ground[data_id*num_frames+image_id,:])**2+(y2_predict_ref - y2_ground[data_id*num_frames+image_id,:])**2)).detach().to("cpu").numpy())
-                '''
+            '''        accuracy = []
+            for data_id in range(num_data):
+                for image_id in range(num_frames):
+                    points_3D_ref = normilized_point[image_id, [0, 1, 2], :] * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
+                    points_3D_ref_latent = (normilized_point[image_id, [0, 1, 2], :] + torch.cat((latent_space[[0, 1],:], latent_space_const),0)) * random_depth_data[data_id * num_frames + image_id, :].repeat(3, 1)
+                    y_result_ref = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D_ref, normilized_point[image_id, [0, 1], :]), 0))
+                    y_result_ref_latent = shape_partial_derivate[0].forward(X_Node, X_Neis, torch.cat((points_3D_ref_latent, normilized_point[image_id, [0, 1], :]), 0))#Way 1
+                    ###################
+                    #y_result_ref = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D_ref, normilized_point[image_id, [0, 1], :]), 0))
+                    #y_result_ref_latent = shape_partial_derivate[image_id].forward(X_Node, X_Neis, torch.cat((points_3D_ref_latent, normilized_point[image_id, [0, 1], :]), 0))#Way 1
+                    ###############
+                    #y_result_ref_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D_ref_latent, normilized_point[0, [0, 1], :]), 0))#Way 2
+                    #y_result_ref_latent = shape_partial_derivate.forward(X_Node, X_Neis, torch.cat((points_3D_ref+points_3D_ref_latent, normilized_point[0, [0, 1], :]), 0))#Way 2
+                    #y_result_ref = shape_partial_derivate.forward(X_Node, X_Neis, points_3D_ref)
+                    #y_result_ref = shape_partial_derivate.forward( torch.flatten(points_3D_ref))
+                    #y_result_ref = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D_ref, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
+                    #y_result_ref_latent = shape_partial_derivate[image_id].forward(torch.flatten(torch.transpose(torch.cat((points_3D_ref_latent, normilized_point[image_id, [0, 1, ], :]), 0), 0, 1)))
+                    y1_predict_ref = (y_result_ref_latent[:num_point_per_frame]-y_result_ref[:num_point_per_frame])/latent_space[0,:]
+                    y2_predict_ref = (y_result_ref_latent[num_point_per_frame:]-y_result_ref[num_point_per_frame:])/latent_space[1,:]
+                    accuracy.append(torch.sum(((y1_predict_ref - y1_ground[data_id*num_frames+image_id,:])**2+(y2_predict_ref - y2_ground[data_id*num_frames+image_id,:])**2)).detach().to("cpu").numpy())
+                    '''
 
-        if i % 3 == 2:  # print every 3 iterations
-            print('[%5d, %5d] loss: %.6f' % (i + 1, num_iterations, output.data))
-            #print(*accuracy, sep = ", ")
-            print("\n")
+            if i % 3 == 2:  # print every 3 iterations
+                print('[%5d, %5d] loss: %.6f' % (i + 1, num_iterations, output.data))
+                #print(*accuracy, sep = ", ")
+                print("\n")
+            
+            # [Added] Save Checkpoint every 100 iterations
+            if (i + 1) % 100 == 0:
+                print(f"Saving checkpoint at iteration {i+1}...")
+                torch.save({
+                    'iteration': i,
+                    'net0_state_dict': shape_partial_derivate[0].state_dict(),
+                    'net1_state_dict': shape_partial_derivate[1].state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, ckpt_path)
+
+    except Exception as e:
+        print(f"\nTraining interrupted at iteration {i} due to error: {e}")
+        print("Attempting to save emergency checkpoint...")
+        try:
+            torch.save({
+                'iteration': i,
+                'net0_state_dict': shape_partial_derivate[0].state_dict(),
+                'net1_state_dict': shape_partial_derivate[1].state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+            }, ckpt_path)
+            print(f"Emergency checkpoint saved to {ckpt_path}")
+        except:
+            print("Failed to save emergency checkpoint.")
+        raise e
 
     '''y1_ground_accuracy = torch.zeros(num_frames, num_point_per_frame).to(device)
     y2_ground_accuracy = torch.zeros(num_frames, num_point_per_frame).to(device)
@@ -173,8 +215,8 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
         y2_ground_accuracy[image_id, :] = dqv[2, :] / points_3D[image_id, 2, :]
     y_result_accuracy = shape_partial_derivate[0].forward(points_3D)
     y_result_latent_accuracy = shape_partial_derivate[1].forward(points_3D)  # Way 1'''
-    print('accuracy: %.8f (u)  %.8f (v)' % (torch.sqrt(loss1), torch.sqrt(loss2)))
+    print('accuracy: %.8f (u)  %.8f (v)' % (torch.sqrt(loss1), torch.sqrt(loss2))) #u 方向、v 方向像素导数预测的绝对均方根误差（RMSE）
     print('accuracy: %.8f (u)  %.8f (v)' % (torch.sqrt(loss1)/torch.mean(torch.abs(y_result)),
-                                        torch.sqrt(loss2)/torch.mean(torch.abs(y_result_latent))))
+                                        torch.sqrt(loss2)/torch.mean(torch.abs(y_result_latent)))) #u 方向、v 方向像素导数预测的相对误差（归一化 RMSE）
 
     return  shape_partial_derivate, [] #, latent_space #shape_weights

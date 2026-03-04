@@ -11,53 +11,6 @@ from NRSfM_core.shape_decoder import ShapeDecoder, ShapeDecoder_DGNC
 from Result_evaluation.Shape_error import shape_error, shape_error_image
 from NRSfM_core.GNN_model import Non_LinearGNN
 
-# [Added] Function to compute e3D error based on Paper [14]
-def compute_dense_e3d(prediction, ground_truth, do_scale=True):
-    """
-    Compute e3D error: (1/T) * Sum( ||S_gt - S_recon||_F / ||S_gt||_F )
-    Includes Orthogonal Procrustes alignment (with optional scaling).
-    """
-    F, _, P = prediction.shape
-    error_sum = 0.0
-    
-    for t in range(F):
-        P_pred = prediction[t] # (3, P)
-        P_gt = ground_truth[t] # (3, P)
-        
-        # 1. Center data
-        mu_pred = P_pred.mean(axis=1, keepdims=True)
-        mu_gt = P_gt.mean(axis=1, keepdims=True)
-        A = P_pred - mu_pred
-        B = P_gt - mu_gt
-        
-        # 2. Procrustes Alignment (Find R)
-        # Min || B - s * R * A ||
-        U, S, Vt = np.linalg.svd(B @ A.T)
-        R = U @ Vt
-        
-        # Handle reflection
-        if np.linalg.det(R) < 0:
-            Vt[-1, :] *= -1
-            R = U @ Vt
-            
-        # 3. Calculate Scale s (if enabled)
-        if do_scale:
-            A_rotated = R @ A
-            nom = np.sum(A_rotated * B)
-            denom = np.sum(A_rotated * A_rotated)
-            s = nom / (denom + 1e-10)
-        else:
-            s = 1.0
-            
-        # 4. Compute Frobenius Norm Error
-        # Error = || B - s*R*A ||_F / || B ||_F
-        diff_norm = np.linalg.norm(B - s * (R @ A), 'fro')
-        gt_norm = np.linalg.norm(B, 'fro')
-        
-        error_sum += diff_norm / (gt_norm + 1e-10)
-        
-    return error_sum / F
-
 # [Modified] Added resume parameter
 def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, model_derivation, device, resume=False):
     normilized_point_batched,normilized_point_batched_tensor=get_batched_W(normilized_point, device)
@@ -156,37 +109,20 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
             points_3D_result = normilized_point_result * depth_eval.cpu().numpy().repeat(3, 1)
 
             # [Modified] Check if Gth is valid to avoid error, and ensure scalar storage
-            val_e3d = 0.0 # Initialize e3D value
             if Gth is not None and np.any(Gth != 0):
                 err_val = shape_error(points_3D_result, Gth, m)
                 if isinstance(err_val, torch.Tensor):
                     err_val = err_val.item()
                 error_reported[0,i] = err_val
-
-                # [Added] Calculate e3D error for dense dataset
-                try:
-                    # Handle dimension mismatch: Gth might be (3F, P) or (F, 3, P)
-                    Gth_e3d = Gth
-                    if Gth.ndim == 2 and Gth.shape[0] == num_frames * 3:
-                         Gth_e3d = Gth.reshape(num_frames, 3, num_points)
-                    elif Gth.ndim == 3:
-                         Gth_e3d = Gth
-                    
-                    if Gth_e3d.shape == points_3D_result.shape:
-                        val_e3d = compute_dense_e3d(points_3D_result, Gth_e3d, do_scale=True)
-                except Exception as e_calc:
-                    # In case of dimension mismatch or other errors, suppress and continue
-                    val_e3d = 0.0
             else:
                 error_reported[0,i] = 0.0
 
-            if i % 10 == 0:  # print every 3 iterations
+            if i % 3 == 2:  # print every 3 iterations
                 # [Modified] Use cumulative_loss.item() to print scalar value
-                # [Modified] Added e3D print
-                print('[%5d, %5d] loss: %.3f accuracy: %.6f | e3D: %.6f' %(i + 1, num_iterations, cumulative_loss, error_reported[0,i], val_e3d))
+                print('[%5d, %5d] loss: %.3f accuracy: %.6f' %(i + 1, num_iterations, cumulative_loss, error_reported[0,i]))
             
             # [Added] Save Checkpoint every 100 iterations
-            if (i + 1) % 100 == 0:
+            if (i + 1) % 3 == 0:
                 print(f"Saving Checkpoint at iteration {i+1}...")
                 torch.save({
                     'iteration': i,
@@ -289,13 +225,8 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
         start_iter = checkpoint['iteration'] + 1
         print(f"Resumed from iteration {start_iter}")
 
-    normilized_point_result_cached = np.zeros(shape=(num_frames, 3, num_points), dtype=np.float32)#预构建
-    for frame_idx in range(num_frames):
-        normilized_point_result_cached[frame_idx, [0,1], :] = normilized_point_batched[frame_idx, :, :]
-        normilized_point_result_cached[frame_idx, 2, :] = np.ones(num_points)
-
     try:
-        batch_size =20 # [Added] for gradient accumulation
+        batch_size =50 # [Added] for gradient accumulation
         for i in range(start_iter, num_iterations):
             shape_partial_derivate[0].train()
             shape_partial_derivate[1].train()
@@ -321,56 +252,45 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
             shape_decoder.eval()
 
             ## Result evaluation
-                        ## Result evaluation — 每 eval_interval 次迭代才调MATLAB评估，其余只打印loss
-            eval_interval = 20
-            do_eval = ((i + 1) % eval_interval == 0) or (i == start_iter)
-            val_e3d = 0.0
-
-            if do_eval:
-                with torch.no_grad():
-                    depth_eval_raw = shape_decoder.forward(shape_latent_code)
-                
-                if network_model == "MLP":
-                    depth_eval = depth_eval_raw.detach()
-                elif network_model == "DGNC":
-                    depth_eval = depth_eval_raw.detach() + torch.tensor(Initial_shape, requires_grad=False, dtype=torch.float32).to(device)
-                    depth_eval = torch.unsqueeze(depth_eval, 1)
-                
-                points_3D_result = normilized_point_result_cached * depth_eval.cpu().numpy().repeat(3, 1)
-
-                if Gth is not None and np.any(Gth != 0):
-                    err_val = shape_error(points_3D_result, Gth, m)
-                    if isinstance(err_val, torch.Tensor):
-                        err_val = err_val.item()
-                    error_reported[0, i] = err_val
-
-                    try:
-                        Gth_e3d = Gth
-                        if Gth.ndim == 2 and Gth.shape[0] == num_frames * 3:
-                            Gth_e3d = Gth.reshape(num_frames, 3, num_points)
-                        elif Gth.ndim == 3:
-                            Gth_e3d = Gth
-                        if Gth_e3d.shape == points_3D_result.shape:
-                            val_e3d = compute_dense_e3d(points_3D_result, Gth_e3d, do_scale=True)
-                    except Exception as e_calc:
-                        val_e3d = 0.0
-                else:
-                    error_reported[0, i] = 0.0
-
-            if (i + 1) % 10 == 0:
-                if do_eval:
-                    print('[%5d, %5d] loss: %.3f accuracy: %.6f | e3D: %.6f' % (i + 1, num_iterations, cumulative_loss, error_reported[0, i], val_e3d))
-                else:
-                    print('[%5d, %5d] loss: %.3f' % (i + 1, num_iterations, cumulative_loss))
-
+            # [Modified] Detach depth for evaluation
+            with torch.no_grad():
+                depth = shape_decoder.forward(shape_latent_code)
             
-            if (i + 1) % 100 == 0:
-                with torch.no_grad():
-                    depth_for_save = shape_decoder.forward(shape_latent_code)
+            if network_model == "MLP":
+                depth_eval = depth.detach()
+            elif network_model == "DGNC":
+                depth_eval = depth.detach() + torch.tensor(Initial_shape, requires_grad=False, dtype=torch.float32).to(device)
+                depth_eval = torch.unsqueeze(depth_eval, 1)
+            
+            normilized_point_result = np.zeros(shape=(depth_eval.shape[0], 3, depth_eval.shape[2]), dtype=np.float32)
+            #points_3D_result = np.zeros(shape=(depth.shape[0], 3, depth.shape[2]), dtype=np.float32)
+            for frame_idx in range(depth_eval.shape[0]):
+                normilized_point_result[frame_idx, [0,1], :] = normilized_point_batched[frame_idx, :, :]
+                normilized_point_result[frame_idx, 2, :] = np.ones(depth_eval.shape[2])
+            
+            points_3D_result = normilized_point_result * depth_eval.cpu().numpy().repeat(3, 1)
+
+            # [Modified] Check if Gth is valid to avoid error, and ensure scalar storage
+            if Gth is not None and np.any(Gth != 0):
+                err_val = shape_error(points_3D_result, Gth, m)
+                if isinstance(err_val, torch.Tensor):
+                    err_val = err_val.item()
+                error_reported[0,i] = err_val
+            else:
+                error_reported[0,i] = 0.0
+
+            #if i % 3 == 2:  # print every 3 iterations
+            if i % 2 == 0:
+                # [Modified] Use cumulative_loss
+                print('[%5d, %5d] loss: %.3f accuracy: %.6f' %(i + 1, num_iterations, cumulative_loss, error_reported[0,i]))
+
+           
+            if  (i + 1) % 500 == 0: 
                 depth_filename = f"depth_{i}.pt"
                 depth_save_path = os.path.join(result_folder, depth_filename)
-                torch.save(depth_for_save, depth_save_path)
+                torch.save(depth, depth_save_path)
                 print(f"Saved depth file for iteration {i} to {depth_save_path}")
+            
 
 
             # [Added] Save Checkpoint every 100 iterations
@@ -384,9 +304,13 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
                     'latent_code_data': shape_latent_code.data, 
                     'optimizer_state_dict': optimizer.state_dict(),
                 }, ckpt_path)
-                torch.save(depth_for_save, os.path.join(result_folder, "depth_latest.pt"))
+                # Save intermediate depth
+                torch.save(depth, os.path.join(result_folder, "depth_latest.pt"))
                 
+                # [Added] Explicit garbage collection
+                del depth, depth_eval, points_3D_result
                 gc.collect()
+                #torch.cuda.empty_cache()
 
     except Exception as e:
         print(f"\nNetwork 2 (GCN) training interrupted at iteration {i} due to error: {e}")
@@ -423,7 +347,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
             ).to(device)
             depth_final = torch.unsqueeze(depth_final, 1)
 
-    torch.save(depth_final, os.path.join(result_folder, "depth.pt"))
+    torch.save(depth_final, os.path.join(result_folder, "depth_noglobal.pt"))
 
     ## View results
     # [Modified] Check if Gth is valid

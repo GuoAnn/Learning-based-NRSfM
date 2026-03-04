@@ -1,5 +1,5 @@
-import matlab.engine
 import torch
+import matlab.engine
 from torch import autograd
 import numpy as np
 

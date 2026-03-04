@@ -52,35 +52,41 @@ def get_graph_feature(x, k=20, idx=None):
 
 
 class ShapeDecoder(nn.Module):
-    def __init__(self,num_frame,num_points,Initial_shape,device):
-        super(ShapeDecoder,self).__init__()
+    def __init__(self, num_frame, num_points, Initial_shape, device):
+        super(ShapeDecoder, self).__init__()
         self.num_frame = num_frame
         self.num_points = num_points
-        self.activation = nn.ELU(alpha=1.0) #nn.PReLU()
-        self.fc1 = nn.Linear(1, 2)
-        self.fc2 = nn.Linear(2, 8)
-        self.fc3 = nn.Linear(8, 8)
-        self.fc4 = nn.Linear(8, 8)
-        self.fc5 = nn.Linear(8, 16)
-        self.fc6 = nn.Linear(16, 32)
-        self.fc7 = nn.Linear(32, 32)
-        self.fc8 = nn.Linear(32, 32)
-        self.fc9 = nn.Linear(32, num_points, bias=False)
+        self.activation = nn.ELU(alpha=1.0)
         self.Initial_shape = Initial_shape
-        self.device=device
+        self.device = device
 
-    def forward(self,x):
-        fc1_out = self.activation(self.fc1(x))
-        fc2_out = self.activation(self.fc2(fc1_out))
-        fc3_out = self.activation(self.fc3(fc2_out))
-        fc4_out = self.activation(self.fc4(fc3_out))
-        fc5_out = self.activation(self.fc5(fc4_out))
-        fc6_out = self.activation(self.fc6(fc5_out))
-        fc7_out = self.activation(self.fc7(fc6_out))
-        fc8_out = self.activation(self.fc8(fc7_out))
-        depth = self.fc9(fc8_out) +torch.tensor((self.Initial_shape),dtype=torch.float32, device=self.device)#
-        #depth = torch.tensor((self.Initial_shape))
-        reconstruction = depth.reshape(self.num_frame,  1, self.num_points)
+        # 根据点数自适应选择网络宽度
+        if num_points <= 500:
+            # 稀疏数据集：保持原始结构
+            hidden_dims = [2, 8, 8, 8, 16, 32, 32, 32]
+        else:
+            # 密集数据集 (>200 点)：大幅扩展
+            hidden_dims = [4, 16, 32, 64, 128, 128, 128, 128]
+
+        # 动态构建网络层
+        layers = []
+        in_dim = 1
+        for h_dim in hidden_dims:
+            layers.append(nn.Linear(in_dim, h_dim))
+            in_dim = h_dim
+        self.hidden_layers = nn.ModuleList(layers)
+
+        # 输出层（无 bias，与原设计一致）
+        self.fc_out = nn.Linear(hidden_dims[-1], num_points, bias=False)
+
+    def forward(self, x):
+        h = x
+        for layer in self.hidden_layers:
+            h = self.activation(layer(h))
+        depth = self.fc_out(h) + torch.tensor(
+            self.Initial_shape, dtype=torch.float32, device=self.device
+        )
+        reconstruction = depth.reshape(self.num_frame, 1, self.num_points)
         return reconstruction
 
 

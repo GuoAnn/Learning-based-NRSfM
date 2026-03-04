@@ -322,7 +322,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
 
             ## Result evaluation
                         ## Result evaluation — 每 eval_interval 次迭代才调MATLAB评估，其余只打印loss
-            eval_interval = 20
+            eval_interval = 10
             do_eval = ((i + 1) % eval_interval == 0) or (i == start_iter)
             val_e3d = 0.0
 

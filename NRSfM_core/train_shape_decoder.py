@@ -62,7 +62,7 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
         start_iter = checkpoint['iteration'] + 1
         print(f"Resumed from iteration {start_iter}")
 
-    last_idx = start_iter
+    last_idx = max(start_iter - 1, 0)
     try:
         batch_size = 500 
         for i in range(start_iter, num_iterations):

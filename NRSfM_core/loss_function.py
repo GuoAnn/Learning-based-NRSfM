@@ -34,8 +34,9 @@ class NRSfMLoss:
             mask_array = np.ones((self.num_frames, self.num_point_per_frame), dtype=np.float32)
         else:
             mask_array = np.array(mask, dtype=np.float32)
-            # Some pipelines may build a 2*F x N visibility mask aligned with the (2F, N) observation layout.
-            # In that case, take one row per frame to align with the batched (F, N) representation.
+            # Some pipelines may build a 2*F x N visibility mask aligned with the (2F, N) observation layout,
+            # where consecutive rows correspond to x/y visibility for the same frame. We use the x-row mask
+            # as the per-frame visibility signal to align with the batched (F, N) representation.
             if mask_array.shape[0] == self.num_frames * 2:
                 mask_array = mask_array[::2]
         self.mask = torch.tensor(mask_array, dtype=torch.float32, device=self.device)

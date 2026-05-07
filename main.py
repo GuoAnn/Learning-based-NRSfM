@@ -116,6 +116,7 @@ def build_visibility_mask(scene_normalized, drop_ratio):
 
 
 def run_training_pipeline(scene_normalized, scene_apoints, J, file_id, args, device, result_folder, mask=None, num_iterations=None):
+    os.makedirs(result_folder, exist_ok=True)
     random_depth_data = []
 
     if dataset_params["save_or_load"] == "save":
@@ -139,7 +140,6 @@ def run_training_pipeline(scene_normalized, scene_apoints, J, file_id, args, dev
                 total_injected += recursive_inject_noise(mat_data[key], key, noise_scale)
 
             if total_injected > 0:
-                os.makedirs(result_folder, exist_ok=True)
                 temp_mat_path = os.path.join(result_folder, "temp_jittered.mat")
                 sio.savemat(temp_mat_path, mat_data)
                 print(f"✅ Modified {total_injected} matrices. Saved to: {temp_mat_path}")
@@ -219,7 +219,7 @@ if __name__ == '__main__':
 
     #####################################################################################################
     # Load dataset
-    full_result_folder, Scene_normalized, Scene_apoints, J,  file_id = load_mat_dataset()
+    full_result_folder, Scene_normalized, Scene_apoints, J, file_id = load_mat_dataset()
     if args.rebuttal_eval:
         knn_ms = None
         forward_ms = None

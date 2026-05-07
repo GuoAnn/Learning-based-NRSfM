@@ -37,7 +37,7 @@ class NRSfMLoss:
             # Some pipelines may build a 2*F x N visibility mask aligned with the (2F, N) observation layout,
             # where consecutive rows correspond to x/y visibility for the same frame. We use the x-row mask
             # as the per-frame visibility signal to align with the batched (F, N) representation.
-            if mask_array.shape[0] == self.num_frames * 2:
+            if mask_array.shape[0] == self.num_frames * 2:  # Handle (2F, N) x/y visibility layout
                 mask_array = mask_array[::2]
         self.mask = torch.tensor(mask_array, dtype=torch.float32, device=self.device)
         if self.num_point_per_frame <= 200:
@@ -465,6 +465,7 @@ class NRSfMLoss:
 
         mask_batch = self.mask[frame_indices]
         neighbor_mask = mask_batch[:, neighbor_indices]
+        # Weight distances by the intersection of visibility for center and neighbor points.
         weights = mask_batch.unsqueeze(-1) * neighbor_mask
         loss_amap = torch.sum((dists - max_dists) ** 2 * weights)
 

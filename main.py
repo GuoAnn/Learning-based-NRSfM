@@ -238,9 +238,9 @@ if __name__ == '__main__':
         else:
             overhead_str = f"{forward_ms:.3f}/{knn_ms:.3f}"
 
-        NOISE_SIGMA_PIXELS = 2.0
+        NOISE_STD_DEV_PIXELS = 2.0
         rebuttal_epochs = 5000
-        noise_scene = apply_gaussian_noise(Scene_normalized.copy(), NOISE_SIGMA_PIXELS)
+        noise_scene = apply_gaussian_noise(Scene_normalized.copy(), NOISE_STD_DEV_PIXELS)
         noise_folder = os.path.join(full_result_folder, "rebuttal_noise")
         noise_error = run_training_pipeline(
             noise_scene, Scene_apoints, J, file_id, args, device, noise_folder,
@@ -255,6 +255,7 @@ if __name__ == '__main__':
         )
 
         print(f"DGCNN/KNN Overhead: {overhead_str} ms")
+        # shape_error outputs percentage values already; keep the percent sign as a label.
         print(f"3D Error with 2px Noise: {noise_error:.6f} %")
         print(f"3D Error with 10% Masking: {mask_error:.6f} %")
         sys.exit(0)

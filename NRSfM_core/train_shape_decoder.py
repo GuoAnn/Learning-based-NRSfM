@@ -62,12 +62,10 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
         start_iter = checkpoint['iteration'] + 1
         print(f"Resumed from iteration {start_iter}")
 
-    last_idx = max(start_iter - 1, 0)
-    has_iteration = False
+    last_idx = None
     try:
         batch_size = 500 
         for i in range(start_iter, num_iterations):
-            has_iteration = True
             last_idx = i
             optimizer.zero_grad()
             cumulative_loss = 0
@@ -140,7 +138,7 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
         depth_final = shape_decoder.forward(shape_latent_code).detach()
         points_3D_final = normilized_point_result * depth_final.cpu().numpy().repeat(3, 1)
         error_reported[0, i] = shape_error_image(points_3D_final, Gth, m)
-    final_eval_error = error_reported[0, last_idx] if has_iteration else 0.0
+    final_eval_error = error_reported[0, last_idx] if last_idx is not None else 0.0
     return final_eval_error
 
 # [Modified] Added resume parameter and Debugging

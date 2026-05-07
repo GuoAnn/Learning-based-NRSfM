@@ -81,7 +81,7 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
     def masked_mse(pred, target, mask_tensor):
         if mask_tensor is None:
             return loss(pred, target)
-        # Normalize by the sum of binary visibility weights so missing observations do not shrink the loss.
+        # Normalize by the sum of binary visibility weights (intentional to keep loss scale per visible point).
         denom = torch.clamp(mask_tensor.sum(), min=1.0)
         return torch.sum((pred - target) ** 2 * mask_tensor) / denom
     batch_size = 16

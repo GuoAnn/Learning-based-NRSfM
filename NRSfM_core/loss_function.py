@@ -286,13 +286,13 @@ class NRSfMLoss:
             G21_bar = G12_bar
             eq3=du_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G11*G12_bar+du_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G12*G12_bar+dv_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G21*G12_bar+dv_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G22*G12_bar-du_dubar[frame_idx-1,:]*du_dvbar[frame_idx-1,:]*G11*G11_bar-du_dubar[frame_idx-1,:]*dv_dvbar[frame_idx-1,:]*G12*G11_bar-dv_dubar[frame_idx-1, :] * du_dvbar[frame_idx-1, :] * G21 * G11_bar -dv_dubar[frame_idx-1, :] * dv_dvbar[frame_idx-1, :] * G22 * G11_bar
             eq4=du_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G11*G22_bar+du_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G12*G22_bar+dv_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G21*G22_bar+dv_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G22*G22_bar-du_dvbar[frame_idx-1,:]*du_dvbar[frame_idx-1,:]*G11*G11_bar-du_dvbar[frame_idx-1,:]*dv_dvbar[frame_idx-1,:]*G12*G11_bar-dv_dvbar[frame_idx-1, :] * du_dvbar[frame_idx-1, :] * G21 * G11_bar -dv_dvbar[frame_idx-1, :] * dv_dvbar[frame_idx-1, :] * G22 * G11_bar
-            mask_pair = self.mask[frame_idx] * self.mask[0]
+            mask_combined = self.mask[frame_idx] * self.mask[0]
             loss_subterm_connection_value_2 = (
                 loss_subterm_connection_value_2
-                + torch.sum(torch.square(eq1 * mask_pair))
-                + torch.sum(torch.square(eq2 * mask_pair))
-                + torch.sum(torch.square(eq3 * mask_pair))
-                + torch.sum(torch.square(eq4 * mask_pair))
+                + torch.sum(torch.square(eq1 * mask_combined))
+                + torch.sum(torch.square(eq2 * mask_combined))
+                + torch.sum(torch.square(eq3 * mask_combined))
+                + torch.sum(torch.square(eq4 * mask_combined))
             )
 
         loss_subterm_connection_value = loss_subterm_connection_value_1 + loss_subterm_connection_value_2

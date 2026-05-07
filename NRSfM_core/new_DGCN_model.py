@@ -96,9 +96,9 @@ def profile_dgcnn_overhead(model, x, warmup=5, iters=20):
         state.enabled = False
     if not state.forward_ms:
         return None, None
-    forward_avg = float(np.mean(state.forward_ms)) / x.shape[0]
-    knn_avg = float(np.mean(state.knn_ms)) / x.shape[0]
-    return knn_avg, forward_avg
+    forward_per_sample_ms = float(np.mean(state.forward_ms)) / x.shape[0]
+    knn_per_sample_ms = float(np.mean(state.knn_ms)) / x.shape[0]
+    return knn_per_sample_ms, forward_per_sample_ms
 
 
 class DGCNNControlPoints(nn.Module):

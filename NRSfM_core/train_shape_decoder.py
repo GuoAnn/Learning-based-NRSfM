@@ -136,7 +136,7 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
         depth_final = shape_decoder.forward(shape_latent_code).detach()
         points_3D_final = normilized_point_result * depth_final.cpu().numpy().repeat(3, 1)
         error_reported[0, i] = shape_error_image(points_3D_final, Gth, m)
-    final_eval_error = error_reported[0, i]
+    final_eval_error = error_reported[0, -1]
     return final_eval_error
 
 # [Modified] Added resume parameter and Debugging

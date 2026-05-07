@@ -2,24 +2,31 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import threading
 
 EPS = np.finfo(np.float32).eps
-_PROFILE_STATE = {
-    "enabled": False,
-    "knn_ms": [],
-    "forward_ms": [],
-    "knn_ms_current": 0.0,
-}
+_PROFILE_STATE = threading.local()
+
+
+def _get_profile_state():
+    if not hasattr(_PROFILE_STATE, "enabled"):
+        _PROFILE_STATE.enabled = False
+        _PROFILE_STATE.knn_ms = []
+        _PROFILE_STATE.forward_ms = []
+        _PROFILE_STATE.knn_ms_current = 0.0
+    return _PROFILE_STATE
 
 
 def _profiling_enabled(x):
-    return _PROFILE_STATE["enabled"] and x.is_cuda
+    state = _get_profile_state()
+    return state.enabled and x.is_cuda
 
 
 def knn(x, k):
     batch_size = x.shape[0]
     indices = np.arange(0, k)
-    profile = _profiling_enabled(x)
+    state = _get_profile_state()
+    profile = state.enabled and x.is_cuda
     if profile:
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
@@ -37,7 +44,7 @@ def knn(x, k):
     if profile:
         end_event.record()
         torch.cuda.synchronize()
-        _PROFILE_STATE["knn_ms_current"] += start_event.elapsed_time(end_event)
+        state.knn_ms_current += start_event.elapsed_time(end_event)
     return idx
 
 
@@ -76,20 +83,21 @@ def profile_dgcnn_overhead(model, x, warmup=5, iters=20):
     if not x.is_cuda:
         return None, None
     model.eval()
+    state = _get_profile_state()
     with torch.no_grad():
         for _ in range(warmup):
             model(x)
-        _PROFILE_STATE["knn_ms"] = []
-        _PROFILE_STATE["forward_ms"] = []
-        _PROFILE_STATE["knn_ms_current"] = 0.0
-        _PROFILE_STATE["enabled"] = True
+        state.knn_ms = []
+        state.forward_ms = []
+        state.knn_ms_current = 0.0
+        state.enabled = True
         for _ in range(iters):
             model(x)
-        _PROFILE_STATE["enabled"] = False
-    if not _PROFILE_STATE["forward_ms"]:
+        state.enabled = False
+    if not state.forward_ms:
         return None, None
-    forward_avg = float(np.mean(_PROFILE_STATE["forward_ms"])) / x.shape[0]
-    knn_avg = float(np.mean(_PROFILE_STATE["knn_ms"])) / x.shape[0]
+    forward_avg = float(np.mean(state.forward_ms)) / x.shape[0]
+    knn_avg = float(np.mean(state.knn_ms)) / x.shape[0]
     return knn_avg, forward_avg
 
 
@@ -214,11 +222,12 @@ class DGCNNControlPoints(nn.Module):
         """
         :param weights: weights of size B x N
         """
-        profile = _profiling_enabled(x)
+        state = _get_profile_state()
+        profile = state.enabled and x.is_cuda
         if profile:
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)
-            _PROFILE_STATE["knn_ms_current"] = 0.0
+            state.knn_ms_current = 0.0
             start_event.record()
         batch_size = x.size(0)
         x0 = x
@@ -265,6 +274,6 @@ class DGCNNControlPoints(nn.Module):
         if profile:
             end_event.record()
             torch.cuda.synchronize()
-            _PROFILE_STATE["forward_ms"].append(start_event.elapsed_time(end_event))
-            _PROFILE_STATE["knn_ms"].append(_PROFILE_STATE["knn_ms_current"])
+            state.forward_ms.append(start_event.elapsed_time(end_event))
+            state.knn_ms.append(state.knn_ms_current)
         return x

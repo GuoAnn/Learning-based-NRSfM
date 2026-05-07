@@ -116,71 +116,58 @@ def build_visibility_mask(scene_normalized, drop_ratio):
 
 
 def run_training_pipeline(scene_normalized, scene_apoints, J, file_id, args, device, result_folder, mask=None, num_iterations=None):
-    file_names = []
-    points_3D_multiple = []
-    y1_ground_multiple = []
-    y2_ground_multiple = []
     random_depth_data = []
 
-    if file_names:
-        for file_id in file_names:
-            scene_normalized, scene_apoints, J = normalized_points_downsample_load(file_id)
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id, nargout=1))
-            points_3D_all, y1_ground, y2_ground = Collect_data(Initial_shape, scene_normalized, m, device, num_data=10)
-            points_3D_multiple.append(points_3D_all)
-            y1_ground_multiple.append(y1_ground)
-            y2_ground_multiple.append(y2_ground)
-    else:
-        if dataset_params["save_or_load"] == "save":
-            print(f"\n[DIAGNOSIS] Checking data quality for: {file_id[0]}")
-            if np.isnan(scene_normalized).any() or np.isinf(scene_normalized).any():
-                print("❌ CRITICAL: Input data contains NaN or Inf values!")
+    if dataset_params["save_or_load"] == "save":
+        print(f"\n[DIAGNOSIS] Checking data quality for: {file_id[0]}")
+        if np.isnan(scene_normalized).any() or np.isinf(scene_normalized).any():
+            print("❌ CRITICAL: Input data contains NaN or Inf values!")
+        else:
+            print("✅ Data check passed: No static points found (in memory).")
+        print("🔧 Applying tiny Gaussian noise (jitter) to stabilize MATLAB initialization...")
+        noise_scale = 1e-6
+        file_to_load = file_id[0]
+
+        try:
+            mat_data = sio.loadmat(file_id[0])
+            print(f"   [DEBUG] Top-level keys: {list(mat_data.keys())}")
+            total_injected = 0
+            keys = list(mat_data.keys())
+            for key in keys:
+                if key.startswith('__'):
+                    continue
+                total_injected += recursive_inject_noise(mat_data[key], key, noise_scale)
+
+            if total_injected > 0:
+                os.makedirs(result_folder, exist_ok=True)
+                temp_mat_path = os.path.join(result_folder, "temp_jittered.mat")
+                sio.savemat(temp_mat_path, mat_data)
+                print(f"✅ Modified {total_injected} matrices. Saved to: {temp_mat_path}")
+                file_to_load = temp_mat_path
             else:
-                print("✅ Data check passed: No static points found (in memory).")
-            print("🔧 Applying tiny Gaussian noise (jitter) to stabilize MATLAB initialization...")
-            noise_scale = 1e-6
-            file_to_load = file_id[0]
+                print("⚠️ WARNING: Recursive search found NO valid float matrices to inject noise.")
+                print("   Please check if the .mat file format is extremely unusual.")
 
-            try:
-                mat_data = sio.loadmat(file_id[0])
-                print(f"   [DEBUG] Top-level keys: {list(mat_data.keys())}")
-                total_injected = 0
-                keys = list(mat_data.keys())
-                for key in keys:
-                    if key.startswith('__'):
-                        continue
-                    total_injected += recursive_inject_noise(mat_data[key], key, noise_scale)
+        except Exception as e:
+            print(f"⚠️ Error injecting noise: {e}. Using original file.")
+            import traceback
+            traceback.print_exc()
 
-                if total_injected > 0:
-                    os.makedirs(result_folder, exist_ok=True)
-                    temp_mat_path = os.path.join(result_folder, "temp_jittered.mat")
-                    sio.savemat(temp_mat_path, mat_data)
-                    print(f"✅ Modified {total_injected} matrices. Saved to: {temp_mat_path}")
-                    file_to_load = temp_mat_path
-                else:
-                    print("⚠️ WARNING: Recursive search found NO valid float matrices to inject noise.")
-                    print("   Please check if the .mat file format is extremely unusual.")
+        print("============================================================\n")
 
-            except Exception as e:
-                print(f"⚠️ Error injecting noise: {e}. Using original file.")
-                import traceback
-                traceback.print_exc()
+        Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_to_load, nargout=1))
 
-            print("============================================================\n")
+        if file_to_load != file_id[0]:
+            scene_normalized = scene_normalized + np.random.normal(0, noise_scale, scene_normalized.shape)
 
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_to_load, nargout=1))
-
-            if file_to_load != file_id[0]:
-                scene_normalized = scene_normalized + np.random.normal(0, noise_scale, scene_normalized.shape)
-
-            shape_partial_derivate, random_depth_data = Initial_supervised_learning(
-                Initial_shape, scene_normalized, m, device, kNN_degree=20,
-                num_iterations=10, num_data=20,
-                resume=args.resume, checkpoint_dir=result_folder, mask=mask
-            )
-        elif dataset_params["save_or_load"] == "load":
-            Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
-            random_depth_data = []
+        shape_partial_derivate, random_depth_data = Initial_supervised_learning(
+            Initial_shape, scene_normalized, m, device, kNN_degree=20,
+            num_iterations=10, num_data=20,
+            resume=args.resume, checkpoint_dir=result_folder, mask=mask
+        )
+    elif dataset_params["save_or_load"] == "load":
+        Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
+        random_depth_data = []
 
     PATH = os.path.join(result_folder, "0/model.pth")
     PATH1 = os.path.join(result_folder, "1/model1.pth")
@@ -251,8 +238,9 @@ if __name__ == '__main__':
         else:
             overhead_str = f"{forward_ms:.3f}/{knn_ms:.3f}"
 
+        NOISE_SIGMA_PIXELS = 2.0
         rebuttal_epochs = 5000
-        noise_scene = apply_gaussian_noise(Scene_normalized.copy(), 2.0)
+        noise_scene = apply_gaussian_noise(Scene_normalized.copy(), NOISE_SIGMA_PIXELS)
         noise_folder = os.path.join(full_result_folder, "rebuttal_noise")
         noise_error = run_training_pipeline(
             noise_scene, Scene_apoints, J, file_id, args, device, noise_folder,

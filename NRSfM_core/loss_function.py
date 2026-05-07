@@ -326,7 +326,36 @@ class NRSfMLoss:
         
         return loss_subterm_distance_value'''
 
-    def loss_subterm_distance_invariance(self, depth, frame_indices=None):
+    def update_global_max_dists(self, depth):
+        """
+        预计算所有帧的全局 max distance，供 AMAP 使用。
+        在 torch.no_grad() 下调用，不产生计算图。
+        """
+        with torch.no_grad():
+            if depth.dim() == 2:
+                depth_exp = depth.unsqueeze(1)
+            else:
+                depth_exp = depth
+
+            points_3D = self.normilized_point * depth_exp.repeat(1, 3, 1)
+            F_all, _, N = points_3D.shape
+            K = self.k
+
+            if isinstance(self.ID, np.ndarray):
+                neighbor_indices = torch.from_numpy(self.ID).long().to(self.device)
+            else:
+                neighbor_indices = self.ID.long()
+
+            flat_indices = neighbor_indices.view(-1)
+            neighbors_flat = points_3D[:, :, flat_indices]
+            neighbors = neighbors_flat.view(F_all, 3, N, K)
+            centers = points_3D.unsqueeze(-1)
+
+            dists = torch.norm(centers - neighbors, p=2, dim=1)  # [F_all, N, K]
+            self._global_max_dists, _ = torch.max(dists, dim=0, keepdim=True)  # [1, N, K]
+
+
+    '''def loss_subterm_distance_invariance(self, depth, frame_indices=None):
         """
         Vectorized implementation for both ARAP and AMAP.
         depth: [F, 1, N] or [F, N]
@@ -374,8 +403,46 @@ class NRSfMLoss:
         max_dists, _ = torch.max(dists, dim=0, keepdim=True) # [1, N, K]
         loss_amap = torch.sum((dists - max_dists) ** 2)
         
-        return loss_amap#切换amap/arap
+        return loss_amap#切换amap/arap'''
+    
+    def loss_subterm_distance_invariance(self, depth, frame_indices=None):
+        """
+        Vectorized AMAP using global max distances.
+        """
+        if frame_indices is None:
+            frame_indices = list(range(self.num_frames))
 
+        if depth.dim() == 2:
+            depth_batch = depth[frame_indices].unsqueeze(1)
+        else:
+            depth_batch = depth[frame_indices]
+
+        points_3D = self.normilized_point[frame_indices] * depth_batch.repeat(1, 3, 1)
+
+        F, _, N = points_3D.shape
+        K = self.k
+
+        if isinstance(self.ID, np.ndarray):
+            neighbor_indices = torch.from_numpy(self.ID).long().to(self.device)
+        else:
+            neighbor_indices = self.ID.long()
+
+        flat_indices = neighbor_indices.view(-1)
+        neighbors_flat = points_3D[:, :, flat_indices]
+        neighbors = neighbors_flat.view(F, 3, N, K)
+        centers = points_3D.unsqueeze(-1)
+
+        dists = torch.norm(centers - neighbors, p=2, dim=1)  # [F_batch, N, K]
+
+        # ★ 用全局 max 而非 batch 内 max
+        if hasattr(self, '_global_max_dists') and self._global_max_dists is not None:
+            max_dists = self._global_max_dists
+        else:
+            max_dists, _ = torch.max(dists, dim=0, keepdim=True)
+
+        loss_amap = torch.sum((dists - max_dists) ** 2)
+
+        return loss_amap
 
     def loss_subterm_smooth(self, depth):
         # 1. 修复设备报错：使用 self.normilized_point（它已经在 GPU 上了）

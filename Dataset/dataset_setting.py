@@ -3,7 +3,7 @@
 dataset_params = {
 ########################### Kinect T Shirt Dataset ###################################################
     "base_dir": "/home/gax/NRSfM_dataset",
-    "dataset_name": "dense_dataset/Dense_paper",
+    "dataset_name": "challenge_dataset/tearing_vis/orthogonal/tricky",#dense_dataset/Dense_paper
     #"results_base_folder" :"/home/gax/NRSfM_dataset/results",# "results/",
     "preprocessed_W_filename" : "/home/gax/NRSfM_dataset/nnrsfm_datasets/KINECT_TSHIRT/measurement_matrix_W/W.txt",#"KINECT_TSHIRT/measurement_matrix_W/W.txt",
 
@@ -18,6 +18,6 @@ dataset_params = {
 
     #"gt_images_location": "/KINECT_TSHIRT/seq/",
     #"gt_images_file" : "gt_files/gt_images_kinect_seq.txt",
-    "save_or_load" : "load" #"save" "load"
+    "save_or_load" : "save" #"save" "load"
 #####################################################################################################
 }

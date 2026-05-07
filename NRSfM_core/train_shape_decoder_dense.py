@@ -11,6 +11,221 @@ from NRSfM_core.shape_decoder import ShapeDecoder, ShapeDecoder_DGNC
 from Result_evaluation.Shape_error import shape_error, shape_error_image
 from NRSfM_core.GNN_model import Non_LinearGNN
 
+# ★ [Added] 修复后的 e3D 计算函数，参考 File 1 ★
+# 参考论文 [Sidhu2020] 的定义：e3D = 1/T Σ_t ||S_t^GT - S_t||_F / ||S_t^GT||_F
+'''def compute_dense_e3d(prediction, ground_truth, do_scale=True, outlier_threshold=0.5):
+    """
+    计算 dense e3D error，逻辑严格对齐 MATLAB 代码。
+    
+    prediction: (F, 3, P) 重建结果
+    ground_truth: (F, 3, P) GT
+    outlier_threshold: 离群点过滤阈值。
+                       注意：如果数据是归一化的(例如在[-1,1])，阈值可能是 0.05 或 0.1。
+                       如果数据是世界坐标(毫米)，阈值可能是 50 或 100。
+                       如果不传(None)，则不进行二次过滤（对应 MATLAB 注释掉 idx1 判断的情况）。
+    """
+    F, _, P = prediction.shape
+    error_sum = 0.0
+    valid_frames = 0
+    
+    for t in range(F):
+        P_pred = prediction[t]   # (3, P)
+        P_gt = ground_truth[t]   # (3, P)
+        
+        # 1. MATLAB 逻辑: 找出非零的有效点 (idx = find(P1o(:,1)~=0))
+        # 我们假设任意坐标不为0即为有效，或者范数不为0
+        valid_mask = np.sum(np.abs(P_pred), axis=0) > 1e-6
+        if np.sum(valid_mask) < 3: # 点太少无法计算 Procrustes
+            continue
+            
+        # 只取有效点进行第一次对齐
+        A = P_pred[:, valid_mask]
+        B = P_gt[:, valid_mask]
+        
+        # Center
+        mu_A = A.mean(axis=1, keepdims=True)
+        mu_B = B.mean(axis=1, keepdims=True)
+        A_centered = A - mu_A
+        B_centered = B - mu_B
+        
+        # Procrustes 1: find R, s
+        H = B_centered @ A_centered.T
+        U, S, Vt = np.linalg.svd(H)
+        R = U @ Vt
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = U @ Vt
+            
+        A_rot = R @ A_centered
+        if do_scale:
+            # s = sum(trace(A_rot * B)) / sum(trace(A_rot * A_rot))
+            s = np.sum(A_rot * B_centered) / (np.sum(A_rot * A_rot) + 1e-10)
+        else:
+            s = 1.0
+            
+        aligned_1 = s * A_rot + mu_B # 第一次对齐后的 A
+        
+        # 2. MATLAB 逻辑: 二次过滤 (Thresholding)
+        # idx1 = find(norm(P1_old - P) < threshold)
+        final_mask = np.ones(A.shape[1], dtype=bool) # 在 valid_mask 基础上的 mask
+        
+        if outlier_threshold is not None:
+            # 计算欧氏距离
+            dists = np.sqrt(np.sum((B - aligned_1) ** 2, axis=0))
+            inlier_sub_mask = dists < outlier_threshold
+            
+            # 如果内点太少，就跳过过滤步骤，保留第一次的结果(防止报错)
+            if np.sum(inlier_sub_mask) > 3:
+                final_mask = inlier_sub_mask
+                
+                # 准备第二次 Procrustes 的数据
+                A_2 = A[:, final_mask]
+                B_2 = B[:, final_mask]
+                
+                # Center 2
+                mu_A2 = A_2.mean(axis=1, keepdims=True)
+                mu_B2 = B_2.mean(axis=1, keepdims=True)
+                A2_centered = A_2 - mu_A2
+                B2_centered = B_2 - mu_B2
+                
+                # Procrustes 2
+                H2 = B2_centered @ A2_centered.T
+                U2, S2, Vt2 = np.linalg.svd(H2)
+                R2 = U2 @ Vt2
+                if np.linalg.det(R2) < 0:
+                    Vt2[-1, :] *= -1
+                    R2 = U2 @ Vt2
+                
+                A2_rot = R2 @ A2_centered
+                if do_scale:
+                    s2 = np.sum(A2_rot * B2_centered) / (np.sum(A2_rot * A2_rot) + 1e-10)
+                else:
+                    s2 = 1.0
+                    
+                aligned_final = s2 * A2_rot
+                B_final_centered = B2_centered # Error calculation uses centered data usually or aligned absolute
+                # MATLAB Code: P1x(idx2,:) - P(idx2,:)
+                # MATLAB 的误差计算是在对齐后的绝对坐标上算的，分子分母同理
+                
+                # 为了严格匹配 MATLAB: 
+                # sc(i) = sqrt(sum(sum(P(idx2,:).^2))) -> GT 的 Frobenius Norm
+                # ep1(i) = sqrt(sum(sum((P1x - P).^2))) / sc(i)
+                
+                # 重新计算绝对坐标的对齐结果
+                # Prediction aligned to GT: s2 * R2 * (A_2 - mu_A2) + mu_B2
+                P_pred_final = s2 * (R2 @ (A_2 - mu_A2)) + mu_B2
+                P_gt_final = B_2
+                
+            else:
+                # 没过滤成功，沿用第一次
+                P_pred_final = aligned_1
+                P_gt_final = B
+        else:
+            # 没有阈值，沿用第一次
+            P_pred_final = aligned_1
+            P_gt_final = B
+
+        # 3. 最终误差计算
+        # Numerator: || Pred_aligned - GT ||_F
+        diff_norm = np.linalg.norm(P_pred_final - P_gt_final, 'fro')
+        # Denominator: || GT ||_F
+        gt_norm = np.linalg.norm(P_gt_final, 'fro')
+        
+        error_sum += diff_norm / (gt_norm + 1e-10)
+        valid_frames += 1
+    
+    return error_sum / max(valid_frames, 1)'''
+
+import numpy as np
+
+def compute_dense_e3d(prediction, ground_truth, outlier_threshold=70.0):
+    """
+    [Final Debug Version] 计算 Dense e3D。
+    outlier_threshold: Paper数据集设为70.0, Tshirt数据集设为50.0
+    """
+    # 1. 转换 Tensor -> Numpy
+    if hasattr(prediction, 'cpu'): prediction = prediction.detach().cpu().numpy()
+    if hasattr(ground_truth, 'cpu'): ground_truth = ground_truth.detach().cpu().numpy()
+    if np.isnan(prediction).any(): prediction = np.nan_to_num(prediction)
+
+    # 2. 打印诊断信息 (只打印一次或出错时打印)
+    p_max = np.max(prediction)
+    # 如果预测值太小(说明还没训练起来)，就不打印满屏的Debug了，但依然计算
+    if p_max > 1e-5: 
+        print(f"  [e3D Check] Pred Max: {p_max:.2f}, GT Shape: {ground_truth.shape}")
+
+    F, _, N = prediction.shape
+    error_sum = 0.0
+    valid_frames = 0
+    
+    for t in range(F):
+        P_pred = prediction[t]
+        P_gt = ground_truth[t]
+        
+        # --- 有效性检查: 只看 GT 是否有值 ---
+        valid_mask = np.sum(np.abs(P_gt), axis=0) > 1e-6
+        if np.sum(valid_mask) < 10: continue
+
+        A = P_pred[:, valid_mask]
+        B = P_gt[:, valid_mask]
+        
+        # --- Procrustes 对齐 ---
+        mu_A = A.mean(axis=1, keepdims=True)
+        mu_B = B.mean(axis=1, keepdims=True)
+        A_centered = A - mu_A
+        B_centered = B - mu_B
+        
+        H = B_centered @ A_centered.T
+        U, S, Vt = np.linalg.svd(H)
+        R = U @ Vt
+        if np.linalg.det(R) < 0: Vt[-1, :] *= -1; R = U @ Vt
+            
+        A_rot = R @ A_centered
+        denom = np.sum(A_rot * A_rot)
+        s = np.sum(A_rot * B_centered) / (denom + 1e-10) # 自动计算 Scale
+        
+        aligned_1 = s * A_rot + mu_B 
+        
+        # --- 离群点过滤 ---
+        final_mask = np.ones(A.shape[1], dtype=bool)
+        if outlier_threshold is not None:
+            dists = np.sqrt(np.sum((B - aligned_1) ** 2, axis=0))
+            inlier_sub_mask = dists < outlier_threshold
+            
+            if np.sum(inlier_sub_mask) > 10:
+                final_mask = inlier_sub_mask
+                # 二次对齐
+                A_2 = A[:, final_mask]
+                B_2 = B[:, final_mask]
+                mu_A2 = A_2.mean(axis=1, keepdims=True)
+                mu_B2 = B_2.mean(axis=1, keepdims=True)
+                A2_c = A_2 - mu_A2
+                B2_c = B_2 - mu_B2
+                H2 = B2_c @ A2_c.T
+                U2, S2, Vt2 = np.linalg.svd(H2)
+                R2 = U2 @ Vt2
+                if np.linalg.det(R2) < 0: Vt2[-1, :] *= -1; R2 = U2 @ Vt2
+                A2_rot = R2 @ A2_c
+                denom2 = np.sum(A2_rot * A2_rot)
+                s2 = np.sum(A2_rot * B2_c) / (denom2 + 1e-10)
+                P_pred_final = s2 * (R2 @ (A_2 - mu_A2)) + mu_B2
+                P_gt_final = B_2
+            else:
+                P_pred_final = aligned_1
+                P_gt_final = B
+        else:
+            P_pred_final = aligned_1
+            P_gt_final = B
+
+        # --- 误差计算 ---
+        diff_norm = np.linalg.norm(P_pred_final - P_gt_final, 'fro')
+        gt_norm = np.linalg.norm(P_gt_final, 'fro')
+        error_sum += diff_norm / (gt_norm + 1e-10)
+        valid_frames += 1
+
+    return error_sum / max(valid_frames, 1)
+
+
 # [Modified] Added resume parameter
 def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, model_derivation, device, resume=False):
     normilized_point_batched,normilized_point_batched_tensor=get_batched_W(normilized_point, device)
@@ -95,6 +310,8 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
             ## Result evaluation
             # [Modified] Detach depth for evaluation to prevent graph accumulation
             # For evaluation, we still might need the full depth
+            val_e3d = 0.0 # [Added] Initialize e3D variable
+            
             with torch.no_grad():
                 depth = shape_decoder.forward(shape_latent_code)
                 depth_eval = depth.detach() # Cut gradient flow
@@ -114,12 +331,24 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
                 if isinstance(err_val, torch.Tensor):
                     err_val = err_val.item()
                 error_reported[0,i] = err_val
+
+                # ★ [Added] e3D Calculation Logic ★
+                try:
+                    Gth_e3d = Gth
+                    if Gth.ndim == 2 and Gth.shape[0] == num_frames * 3:
+                         Gth_e3d = Gth.reshape(num_frames, 3, num_points)
+                    
+                    if Gth_e3d.shape == points_3D_result.shape:
+                        val_e3d = compute_dense_e3d(points_3D_result, Gth_e3d, do_scale=True)
+                except Exception as e_calc:
+                    val_e3d = 0.0
             else:
                 error_reported[0,i] = 0.0
 
             if i % 3 == 2:  # print every 3 iterations
                 # [Modified] Use cumulative_loss.item() to print scalar value
-                print('[%5d, %5d] loss: %.3f accuracy: %.6f' %(i + 1, num_iterations, cumulative_loss, error_reported[0,i]))
+                # [Added] Added val_e3d print
+                print('[%5d, %5d] loss: %.3f accuracy: %.6f | e3D: %.6f' %(i + 1, num_iterations, cumulative_loss, error_reported[0,i], val_e3d))
             
             # [Added] Save Checkpoint every 100 iterations
             if (i + 1) % 3 == 0:
@@ -226,7 +455,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
         print(f"Resumed from iteration {start_iter}")
 
     try:
-        batch_size =50 # [Added] for gradient accumulation
+        batch_size =30 # [Added] for gradient accumulation
         for i in range(start_iter, num_iterations):
             shape_partial_derivate[0].train()
             shape_partial_derivate[1].train()
@@ -253,6 +482,8 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
 
             ## Result evaluation
             # [Modified] Detach depth for evaluation
+            val_e3d = 0.0 # [Added] Initialize e3D variable
+            
             with torch.no_grad():
                 depth = shape_decoder.forward(shape_latent_code)
             
@@ -276,16 +507,51 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
                 if isinstance(err_val, torch.Tensor):
                     err_val = err_val.item()
                 error_reported[0,i] = err_val
+
+                # ★ [Added] e3D Calculation Logic ★
+                '''try:
+                    Gth_e3d = Gth
+                    if Gth.ndim == 2 and Gth.shape[0] == num_frames * 3:
+                        Gth_e3d = Gth.reshape(num_frames, 3, num_points)
+                    elif Gth.ndim == 3:
+                        Gth_e3d = Gth
+                    if Gth_e3d.shape == points_3D_result.shape:
+                        val_e3d = compute_dense_e3d(points_3D_result, Gth_e3d, do_scale=True)
+                except Exception as e_calc:
+                    val_e3d = 0.0'''
+                
+                try:
+                    Gth_e3d = Gth
+                    # 确保 GT 维度正确
+                    if Gth.ndim == 2 and Gth.shape[0] == num_frames * 3:
+                        Gth_e3d = Gth.reshape(num_frames, 3, num_points)
+                    elif Gth.ndim == 3:
+                        Gth_e3d = Gth
+                    
+                    # 检查形状匹配
+                    if Gth_e3d.shape == points_3D_result.shape:
+                        # !!! 关键修改: 移除了 do_scale=True, 增加了 outlier_threshold
+                        # Paper: 100.0, T-shirt: 50.0
+                        val_e3d = compute_dense_e3d(points_3D_result, Gth_e3d, outlier_threshold=70.0)
+                    else:
+                        print(f"e3D Error: Shape mismatch Pred{points_3D_result.shape} vs GT{Gth_e3d.shape}")
+                        val_e3d = 0.0
+                except Exception as e_calc:
+                    # 打印具体报错，不再静默失败
+                    print(f"e3D Calculation Failed: {e_calc}")
+                    val_e3d = 0.0
+
             else:
                 error_reported[0,i] = 0.0
 
             #if i % 3 == 2:  # print every 3 iterations
-            if i % 1 == 0:
+            if i % 5 == 0:
                 # [Modified] Use cumulative_loss
-                print('[%5d, %5d] loss: %.3f accuracy: %.6f' %(i + 1, num_iterations, cumulative_loss, error_reported[0,i]))
+                # [Added] Added val_e3d print
+                print('[%5d, %5d] loss: %.3f accuracy: %.6f | e3D: %.6f' %(i + 1, num_iterations, cumulative_loss, error_reported[0,i], val_e3d))
 
            
-            if i == 1 or (i + 1) % 20 == 0:
+            if  i % 500 == 0: 
                 depth_filename = f"depth_{i}.pt"
                 depth_save_path = os.path.join(result_folder, depth_filename)
                 torch.save(depth, depth_save_path)

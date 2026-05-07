@@ -4,11 +4,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 EPS = np.finfo(np.float32).eps
+_PROFILE_STATE = {
+    "enabled": False,
+    "knn_ms": [],
+    "forward_ms": [],
+    "knn_ms_current": 0.0,
+}
+
+
+def _profiling_enabled(x):
+    return _PROFILE_STATE["enabled"] and x.is_cuda
 
 
 def knn(x, k):
     batch_size = x.shape[0]
     indices = np.arange(0, k)
+    profile = _profiling_enabled(x)
+    if profile:
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
     with torch.no_grad():
         distances = []
         for b in range(batch_size):
@@ -19,6 +34,10 @@ def knn(x, k):
         distances = torch.stack(distances, 0)
         distances = distances.squeeze(1)
         idx = distances.topk(k=k, dim=-1)[1][:, :, indices]
+    if profile:
+        end_event.record()
+        torch.cuda.synchronize()
+        _PROFILE_STATE["knn_ms_current"] += start_event.elapsed_time(end_event)
     return idx
 
 
@@ -51,6 +70,27 @@ def get_graph_feature(x, k=20, idx=None):
     feature = torch.cat((feature - x, x), dim=3).permute(0, 3, 1, 2)
 
     return feature
+
+
+def profile_dgcnn_overhead(model, x, warmup=5, iters=20):
+    if not x.is_cuda:
+        return None, None
+    model.eval()
+    with torch.no_grad():
+        for _ in range(warmup):
+            model(x)
+        _PROFILE_STATE["knn_ms"] = []
+        _PROFILE_STATE["forward_ms"] = []
+        _PROFILE_STATE["knn_ms_current"] = 0.0
+        _PROFILE_STATE["enabled"] = True
+        for _ in range(iters):
+            model(x)
+        _PROFILE_STATE["enabled"] = False
+    if not _PROFILE_STATE["forward_ms"]:
+        return None, None
+    forward_avg = float(np.mean(_PROFILE_STATE["forward_ms"])) / x.shape[0]
+    knn_avg = float(np.mean(_PROFILE_STATE["knn_ms"])) / x.shape[0]
+    return knn_avg, forward_avg
 
 
 class DGCNNControlPoints(nn.Module):
@@ -174,6 +214,12 @@ class DGCNNControlPoints(nn.Module):
         """
         :param weights: weights of size B x N
         """
+        profile = _profiling_enabled(x)
+        if profile:
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            _PROFILE_STATE["knn_ms_current"] = 0.0
+            start_event.record()
         batch_size = x.size(0)
         x0 = x
         x = get_graph_feature(x, k=self.k)
@@ -216,4 +262,9 @@ class DGCNNControlPoints(nn.Module):
         x = self.tanh(x[:, :, 0])
 
         #x = x.view(batch_size, self.controlpoints * self.controlpoints, 3)
+        if profile:
+            end_event.record()
+            torch.cuda.synchronize()
+            _PROFILE_STATE["forward_ms"].append(start_event.elapsed_time(end_event))
+            _PROFILE_STATE["knn_ms"].append(_PROFILE_STATE["knn_ms_current"])
         return x

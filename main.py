@@ -18,7 +18,7 @@ from NRSfM_core.train_shape_decoder import train_shape_decoder, train_shape_deco
 from NRSfM_core.Initial_supervised_learning_DGCN import Initial_supervised_learning_DGCN
 from NRSfM_core.Initial_supervised_learning_multiple_model import Initial_supervised_learning
 from NRSfM_core.Collect_datasets import Collect_data, Initial_learning_from_all_datasets
-from NRSfM_core.new_DGCN_model import DGCNNControlPoints
+from NRSfM_core.new_DGCN_model import DGCNNControlPoints, profile_dgcnn_overhead
 
 
 m = matlab.engine.start_matlab()
@@ -101,71 +101,59 @@ def recursive_inject_noise(data, key_path, noise_scale=1e-6):
     return injected_count
 
 
-if __name__ == '__main__':
-    #####################################################################################################
-    # Parameters setting for learning
-    parser = argparse.ArgumentParser(description='My first deep learning code for NRSfM')
-    parser.add_argument('--batch_size', type=int, default=2,help='Batch size')
-    parser.add_argument('--gpus', type=int, default=1, help='The number of GPUs to use')
-    parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs')
-    parser.add_argument('--all_dataset', type=bool, default=False, help='Number of epochs')
-    parser.add_argument('--resume', action='store_true', help='Resume training from latest checkpoint')
+def apply_gaussian_noise(scene_normalized, sigma):
+    if sigma is None or sigma <= 0:
+        return scene_normalized
+    return scene_normalized + np.random.normal(0, sigma, scene_normalized.shape)
 
-    args = parser.parse_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    #####################################################################################################
-    # Load dataset
+def build_visibility_mask(scene_normalized, drop_ratio):
+    if drop_ratio is None or drop_ratio <= 0:
+        return None
+    num_frames = scene_normalized.shape[0] // 2
+    num_points = scene_normalized.shape[1]
+    return (np.random.rand(num_frames, num_points) >= drop_ratio).astype(np.float32)
+
+
+def run_training_pipeline(scene_normalized, scene_apoints, J, file_id, args, device, result_folder, mask=None, num_iterations=None):
     file_names = []
-    full_result_folder, Scene_normalized, Scene_apoints, J,  file_id = load_mat_dataset()
-
     points_3D_multiple = []
     y1_ground_multiple = []
     y2_ground_multiple = []
-    
+    random_depth_data = []
+
     if file_names:
         for file_id in file_names:
-            Scene_normalized, Scene_apoints, J = normalized_points_downsample_load(file_id)
+            scene_normalized, scene_apoints, J = normalized_points_downsample_load(file_id)
             Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id, nargout=1))
-            points_3D_all, y1_ground, y2_ground = Collect_data(Initial_shape, Scene_normalized, m, device, num_data=10)
+            points_3D_all, y1_ground, y2_ground = Collect_data(Initial_shape, scene_normalized, m, device, num_data=10)
             points_3D_multiple.append(points_3D_all)
             y1_ground_multiple.append(y1_ground)
             y2_ground_multiple.append(y2_ground)
-
     else:
         if dataset_params["save_or_load"] == "save":
-            
-            # ================= [Added] 数据质量诊断与强力修复模块 START =================
             print(f"\n[DIAGNOSIS] Checking data quality for: {file_id[0]}")
-            
-            # 1. 检查 NaN/Inf (内存中)
-            if np.isnan(Scene_normalized).any() or np.isinf(Scene_normalized).any():
+            if np.isnan(scene_normalized).any() or np.isinf(scene_normalized).any():
                 print("❌ CRITICAL: Input data contains NaN or Inf values!")
             else:
                 print("✅ Data check passed: No static points found (in memory).")
-
-            # ★★★ 强力修复模式：递归注入噪声 ★★★
             print("🔧 Applying tiny Gaussian noise (jitter) to stabilize MATLAB initialization...")
-            noise_scale = 1e-6 
+            noise_scale = 1e-6
             file_to_load = file_id[0]
 
             try:
-                # 读取原始 mat (不进行 simplify_cells，保持结构以便修改)
                 mat_data = sio.loadmat(file_id[0])
-                print(f"   [DEBUG] Top-level keys: {list(mat_data.keys())}") 
-
+                print(f"   [DEBUG] Top-level keys: {list(mat_data.keys())}")
                 total_injected = 0
                 keys = list(mat_data.keys())
                 for key in keys:
-                    if key.startswith('__'): continue
-                    
-                    # 调用递归函数处理每一个变量
-                    # scipy.io 读取的 struct 往往是 object array 或者是 structured array
-                    # 这个函数会钻进去找到里面的 float 矩阵并加噪声
+                    if key.startswith('__'):
+                        continue
                     total_injected += recursive_inject_noise(mat_data[key], key, noise_scale)
 
                 if total_injected > 0:
-                    temp_mat_path = os.path.join(full_result_folder, "temp_jittered.mat")
+                    os.makedirs(result_folder, exist_ok=True)
+                    temp_mat_path = os.path.join(result_folder, "temp_jittered.mat")
                     sio.savemat(temp_mat_path, mat_data)
                     print(f"✅ Modified {total_injected} matrices. Saved to: {temp_mat_path}")
                     file_to_load = temp_mat_path
@@ -179,39 +167,32 @@ if __name__ == '__main__':
                 traceback.print_exc()
 
             print("============================================================\n")
-            # ================= [Added] 数据质量诊断模块 END ===================
 
-            # 调用 MATLAB，传入修复后的文件
             Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_to_load, nargout=1))
-            
-            # 保持内存一致性
+
             if file_to_load != file_id[0]:
-                 Scene_normalized += np.random.normal(0, noise_scale, Scene_normalized.shape)
+                scene_normalized = scene_normalized + np.random.normal(0, noise_scale, scene_normalized.shape)
 
             shape_partial_derivate, random_depth_data = Initial_supervised_learning(
-                Initial_shape, Scene_normalized, m, device, kNN_degree=20, 
-                num_iterations=10, num_data=20, 
-                resume=args.resume, checkpoint_dir=full_result_folder
-            ) 
+                Initial_shape, scene_normalized, m, device, kNN_degree=20,
+                num_iterations=10, num_data=20,
+                resume=args.resume, checkpoint_dir=result_folder, mask=mask
+            )
         elif dataset_params["save_or_load"] == "load":
             Initial_shape = np.array(m.initialization_for_NRSfM_local_all_new(file_id[0], nargout=1))
             random_depth_data = []
 
-    PATH = os.path.join(full_result_folder,"0/model.pth")
-    PATH1 = os.path.join(full_result_folder, "1/model1.pth")
-    try:
-        os.mkdir(os.path.join(full_result_folder,"0"))
-        os.mkdir(os.path.join(full_result_folder,"1"))
-    except OSError: a=1
-    else: a=1
+    PATH = os.path.join(result_folder, "0/model.pth")
+    PATH1 = os.path.join(result_folder, "1/model1.pth")
+    os.makedirs(os.path.join(result_folder, "0"), exist_ok=True)
+    os.makedirs(os.path.join(result_folder, "1"), exist_ok=True)
 
     if dataset_params["save_or_load"] == "save":
-        torch.save(shape_partial_derivate[0].state_dict(),  PATH)
-        torch.save(shape_partial_derivate[1].state_dict(),  PATH1)
-
+        torch.save(shape_partial_derivate[0].state_dict(), PATH)
+        torch.save(shape_partial_derivate[1].state_dict(), PATH1)
 
     elif dataset_params["save_or_load"] == "load":
-        num_point_per_frame = Scene_normalized.shape[1]
+        num_point_per_frame = scene_normalized.shape[1]
         shape_partial_derivate = []
         num_control_points = num_point_per_frame
         shape_partial_derivate.append(DGCNNControlPoints(num_control_points, num_points=20, mode=0).to(device))
@@ -219,8 +200,75 @@ if __name__ == '__main__':
         shape_partial_derivate[0].load_state_dict(torch.load(PATH))
         shape_partial_derivate[1].load_state_dict(torch.load(PATH1))
 
-
     if random_depth_data:
-        train_shape_decoder(full_result_folder, Scene_normalized, args, J, m, Initial_shape, Scene_apoints, shape_partial_derivate, random_depth_data, device, resume=args.resume)
+        final_error = train_shape_decoder(
+            result_folder, scene_normalized, args, J, m, Initial_shape, scene_apoints,
+            shape_partial_derivate, random_depth_data, device,
+            resume=args.resume, mask=mask, num_iterations=num_iterations
+        )
     else:
-        train_shape_decoder_GCN(full_result_folder, Scene_normalized, args, J, m, Initial_shape, Scene_apoints, shape_partial_derivate, device, resume=args.resume)
+        final_error = train_shape_decoder_GCN(
+            result_folder, scene_normalized, args, J, m, Initial_shape, scene_apoints,
+            shape_partial_derivate, device,
+            resume=args.resume, mask=mask, num_iterations=num_iterations
+        )
+
+    return final_error
+
+
+if __name__ == '__main__':
+    #####################################################################################################
+    # Parameters setting for learning
+    parser = argparse.ArgumentParser(description='My first deep learning code for NRSfM')
+    parser.add_argument('--batch_size', type=int, default=2,help='Batch size')
+    parser.add_argument('--gpus', type=int, default=1, help='The number of GPUs to use')
+    parser.add_argument('--epochs', type=int, default=10000, help='Number of epochs')
+    parser.add_argument('--all_dataset', type=bool, default=False, help='Number of epochs')
+    parser.add_argument('--resume', action='store_true', help='Resume training from latest checkpoint')
+    parser.add_argument('--rebuttal_eval', action='store_true', help='Run rebuttal timing/noise/masking suite')
+
+    args = parser.parse_args()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    #####################################################################################################
+    # Load dataset
+    full_result_folder, Scene_normalized, Scene_apoints, J,  file_id = load_mat_dataset()
+    if args.rebuttal_eval:
+        knn_ms = None
+        forward_ms = None
+        if torch.cuda.is_available():
+            num_points = Scene_normalized.shape[1]
+            frame_points = np.zeros((1, 3, num_points), dtype=np.float32)
+            frame_points[0, 0, :] = Scene_normalized[0, :]
+            frame_points[0, 1, :] = Scene_normalized[1, :]
+            frame_points[0, 2, :] = 1.0
+            probe_input = torch.tensor(frame_points).to(device)
+            probe_model = DGCNNControlPoints(num_points, num_points=20, mode=0).to(device)
+            knn_ms, forward_ms = profile_dgcnn_overhead(probe_model, probe_input, warmup=5, iters=20)
+
+        if knn_ms is None or forward_ms is None:
+            overhead_str = "N/A"
+        else:
+            overhead_str = f"{forward_ms:.3f}/{knn_ms:.3f}"
+
+        rebuttal_epochs = 5000
+        noise_scene = apply_gaussian_noise(Scene_normalized.copy(), 2.0)
+        noise_folder = os.path.join(full_result_folder, "rebuttal_noise")
+        noise_error = run_training_pipeline(
+            noise_scene, Scene_apoints, J, file_id, args, device, noise_folder,
+            mask=None, num_iterations=rebuttal_epochs
+        )
+
+        mask = build_visibility_mask(Scene_normalized, 0.1)
+        mask_folder = os.path.join(full_result_folder, "rebuttal_mask")
+        mask_error = run_training_pipeline(
+            Scene_normalized.copy(), Scene_apoints, J, file_id, args, device, mask_folder,
+            mask=mask, num_iterations=rebuttal_epochs
+        )
+
+        print(f"DGCNN/KNN Overhead: {overhead_str} ms")
+        print(f"3D Error with 2px Noise: {noise_error:.6f} %")
+        print(f"3D Error with 10% Masking: {mask_error:.6f} %")
+        sys.exit(0)
+
+    run_training_pipeline(Scene_normalized, Scene_apoints, J, file_id, args, device, full_result_folder)

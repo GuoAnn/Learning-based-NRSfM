@@ -8,7 +8,7 @@ from NRSfM_core.new_DGCN_model import DGCNNControlPoints
 from NRSfM_core.KNN_graph import Graph_distance
 
 # [Modified] Function signature updated to include resume and checkpoint_dir
-def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, device, kNN_degree, num_iterations, num_data, resume=False, checkpoint_dir=None):
+def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, device, kNN_degree, num_iterations, num_data, resume=False, checkpoint_dir=None, mask=None):
 ##############################parameters##############################################################
     omega = 0.1
     num_frames = normilized_point_batched.shape[0] // 2
@@ -37,6 +37,14 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
     Up_Bound = Initial_shape+np.ones(Initial_shape.shape)*omega
     y1_ground = torch.zeros(num_data*num_frames, num_point_per_frame).to(device)
     y2_ground = torch.zeros(num_data*num_frames, num_point_per_frame).to(device)
+    if mask is None:
+        mask_per_frame = torch.ones((num_frames, num_point_per_frame), device=device)
+    else:
+        mask_array = np.array(mask, dtype=np.float32)
+        if mask_array.shape[0] == num_frames * 2:
+            mask_array = mask_array[::2]
+        mask_per_frame = torch.tensor(mask_array, dtype=torch.float32, device=device)
+    mask_all = mask_per_frame.repeat(num_data, 1)
     for frame_idx in range(num_frames):
         normilized_point_result[frame_idx, [0,1], :] = normilized_point_batched[[frame_idx*2,frame_idx*2+1], :]
         normilized_point_result[frame_idx, 2, :] = np.ones(num_point_per_frame)
@@ -69,6 +77,12 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
     #optimizer = torch.optim.Rprop(parameters_to_optimiza, lr=0.0001, step_sizes=(1e-10, 50))
     optimizer = torch.optim.Adam(parameters_to_optimiza, lr=0.0001)
     loss = torch.nn.MSELoss()#torch.nn.L1Loss()
+
+    def masked_mse(pred, target, mask_tensor):
+        if mask_tensor is None:
+            return loss(pred, target)
+        denom = torch.clamp(mask_tensor.sum(), min=1.0)
+        return torch.sum((pred - target) ** 2 * mask_tensor) / denom
     batch_size = 16
     num_train = num_data * num_frames
 
@@ -98,8 +112,9 @@ def Initial_supervised_learning(Initial_shape, normilized_point_batched, m, devi
                 #torch.cuda.empty_cache()
                 y_result = shape_partial_derivate[0].forward(points_3D_all[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:,:])
                 y_result_latent = shape_partial_derivate[1].forward(points_3D_all[train_batch_id * batch_size:(train_batch_id + 1) * batch_size, :, :])
-                loss1 = loss(y_result, y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
-                loss2 = loss(y_result_latent, y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:])
+                mask_batch = mask_all[train_batch_id*batch_size:(train_batch_id+1)*batch_size, :]
+                loss1 = masked_mse(y_result, y1_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:], mask_batch)
+                loss2 = masked_mse(y_result_latent, y2_ground[train_batch_id*batch_size:(train_batch_id+1)*batch_size,:], mask_batch)
                 output = loss1  + loss2
                 output.backward()  # retain_graph=True
                 optimizer.step()

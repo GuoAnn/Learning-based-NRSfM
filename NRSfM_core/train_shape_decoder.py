@@ -25,18 +25,19 @@ except ImportError:
     print("Warning: matlab.engine not installed. Challenge Error will be 0.0")
     HAS_MATLAB = False
 
-def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, model_derivation, device, resume=False):
+def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, model_derivation, device, resume=False, mask=None, num_iterations=None):
     # 此函数保持原样，未做修改
     normilized_point_batched,normilized_point_batched_tensor=get_batched_W(normilized_point, device)
     num_frames=normilized_point_batched.shape[0]
     num_points = normilized_point_batched.shape[2]
-    num_iterations=100000
+    if num_iterations is None:
+        num_iterations=100000
     kNN_degree=20
     shape_latent_code = to.zeros((num_frames, 1), requires_grad=True, dtype=torch.float32, device=device)
     shape_decoder = ShapeDecoder(num_frames, num_points, Initial_shape, device).to(device)
     shape_decoder = torch.compile(shape_decoder)
     shape_partial_derivate = model_shape
-    all_loss_function = NRSfMLoss(normilized_point_batched, num_points, J, m, device, degree=kNN_degree, normilized_point=normilized_point) 
+    all_loss_function = NRSfMLoss(normilized_point_batched, num_points, J, m, device, degree=kNN_degree, normilized_point=normilized_point, mask=mask) 
     model_derivation.requires_grad=True
     parameters_to_optimiza = [{'params': shape_latent_code}]
     parameters_to_optimiza.append({"params": shape_partial_derivate[0].parameters()})
@@ -135,15 +136,16 @@ def train_shape_decoder(result_folder, normilized_point, args, J, m, Initial_sha
         depth_final = shape_decoder.forward(shape_latent_code).detach()
         points_3D_final = normilized_point_result * depth_final.cpu().numpy().repeat(3, 1)
         error_reported[0, i] = shape_error_image(points_3D_final, Gth, m)
-
-    return 1
+    final_eval_error = error_reported[0, i]
+    return final_eval_error
 
 # [Modified] Added resume parameter and Debugging
-def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, device, resume=False):
+def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial_shape, Gth, model_shape, device, resume=False, mask=None, num_iterations=None):
     normilized_point_batched,normilized_point_batched_tensor=get_batched_W(normilized_point, device)
     num_frames=normilized_point_batched.shape[0]
     num_points = normilized_point_batched.shape[2]
-    num_iterations=500
+    if num_iterations is None:
+        num_iterations=500
     kNN_degree=20
     shape_latent_code = to.zeros((num_frames, 1), requires_grad=True, dtype=torch.float32, device=device)
     network_model = "MLP"
@@ -152,7 +154,7 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
     elif network_model== "DGNC":
         shape_decoder = ShapeDecoder_DGNC(num_points, num_points=20, mode=0).to(device)
     shape_partial_derivate = model_shape
-    all_loss_function = NRSfMLoss(normilized_point_batched, num_points, J, m, device, degree=kNN_degree, normilized_point=normilized_point) 
+    all_loss_function = NRSfMLoss(normilized_point_batched, num_points, J, m, device, degree=kNN_degree, normilized_point=normilized_point, mask=mask) 
     if network_model == "MLP":
         parameters_to_optimiza = [{'params': shape_latent_code}]
     elif network_model == "DGNC":
@@ -409,4 +411,4 @@ def train_shape_decoder_GCN(result_folder, normilized_point, args, J, m, Initial
     if eng is not None:
         eng.quit()
 
-    return 1
+    return final_eval_error

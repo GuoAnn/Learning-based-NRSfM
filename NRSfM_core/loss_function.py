@@ -19,7 +19,7 @@ from torch.autograd.functional import jacobian
 
 class NRSfMLoss:
 
-    def __init__(self, scene_normalized, num_points, J, m, device, degree, normilized_point):
+    def __init__(self, scene_normalized, num_points, J, m, device, degree, normilized_point, mask=None):
         self.num_frames = scene_normalized.shape[0]
         self.num_point_per_frame=scene_normalized.shape[2]
         self.normilized_point_batched=np.zeros(shape=(self.num_frames,3,self.num_point_per_frame), dtype=np.float32)
@@ -30,6 +30,13 @@ class NRSfMLoss:
         self.num_points = num_points
         self.normilized_point = torch.tensor(self.normilized_point_batched).to(device)
         self.device = device
+        if mask is None:
+            mask_array = np.ones((self.num_frames, self.num_point_per_frame), dtype=np.float32)
+        else:
+            mask_array = np.array(mask, dtype=np.float32)
+            if mask_array.shape[0] == self.num_frames * 2:
+                mask_array = mask_array[::2]
+        self.mask = torch.tensor(mask_array, dtype=torch.float32, device=self.device)
         if self.num_point_per_frame <= 200:
             self.omega_CC_and_MC = float(self.num_point_per_frame) ** 2 / 200. / 200.
         else:
@@ -179,7 +186,10 @@ class NRSfMLoss:
 
                 # Only add connection loss for frames in current batch
                 if frame_idx in frame_indices:
-                    loss_subterm_connection_value_1 = loss_subterm_connection_value_1 + self.approximate_weight * torch.sum(torch.square(y_result_final-y_result_mark))
+                    mask_frame = self.mask[frame_idx]
+                    mask_full = torch.cat((mask_frame, mask_frame), 0)
+                    residual = (y_result_final - y_result_mark) * mask_full
+                    loss_subterm_connection_value_1 = loss_subterm_connection_value_1 + self.approximate_weight * torch.sum(torch.square(residual))
         else:
             '''            
                 for frame_idx in range(self.num_frames):
@@ -226,7 +236,10 @@ class NRSfMLoss:
                 y1[idx, :] = y_result[i]
                 y2[idx, :] = y_result_latent[i]
                 if idx in frame_indices:
-                    loss_subterm_connection_value_1 = loss_subterm_connection_value_1 + self.approximate_weight * torch.sum(torch.square(y_result_final_all[i] - y_result_mark[idx]))
+                    mask_frame = self.mask[idx]
+                    mask_full = torch.cat((mask_frame, mask_frame), 0)
+                    residual = (y_result_final_all[i] - y_result_mark[idx]) * mask_full
+                    loss_subterm_connection_value_1 = loss_subterm_connection_value_1 + self.approximate_weight * torch.sum(torch.square(residual))
 
         for frame_idx_m1 in range(self.num_frames-1):
             frame_idx = frame_idx_m1 + 1
@@ -270,7 +283,14 @@ class NRSfMLoss:
             G21_bar = G12_bar
             eq3=du_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G11*G12_bar+du_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G12*G12_bar+dv_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G21*G12_bar+dv_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G22*G12_bar-du_dubar[frame_idx-1,:]*du_dvbar[frame_idx-1,:]*G11*G11_bar-du_dubar[frame_idx-1,:]*dv_dvbar[frame_idx-1,:]*G12*G11_bar-dv_dubar[frame_idx-1, :] * du_dvbar[frame_idx-1, :] * G21 * G11_bar -dv_dubar[frame_idx-1, :] * dv_dvbar[frame_idx-1, :] * G22 * G11_bar
             eq4=du_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G11*G22_bar+du_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G12*G22_bar+dv_dubar[frame_idx-1,:]*du_dubar[frame_idx-1,:]*G21*G22_bar+dv_dubar[frame_idx-1,:]*dv_dubar[frame_idx-1,:]*G22*G22_bar-du_dvbar[frame_idx-1,:]*du_dvbar[frame_idx-1,:]*G11*G11_bar-du_dvbar[frame_idx-1,:]*dv_dvbar[frame_idx-1,:]*G12*G11_bar-dv_dvbar[frame_idx-1, :] * du_dvbar[frame_idx-1, :] * G21 * G11_bar -dv_dvbar[frame_idx-1, :] * dv_dvbar[frame_idx-1, :] * G22 * G11_bar
-            loss_subterm_connection_value_2 = loss_subterm_connection_value_2 + torch.sum(torch.square(eq1))+torch.sum(torch.square(eq2))+torch.sum(torch.square(eq3))+torch.sum(torch.square(eq4))
+            mask_pair = self.mask[frame_idx] * self.mask[0]
+            loss_subterm_connection_value_2 = (
+                loss_subterm_connection_value_2
+                + torch.sum(torch.square(eq1 * mask_pair))
+                + torch.sum(torch.square(eq2 * mask_pair))
+                + torch.sum(torch.square(eq3 * mask_pair))
+                + torch.sum(torch.square(eq4 * mask_pair))
+            )
 
         loss_subterm_connection_value = loss_subterm_connection_value_1 + loss_subterm_connection_value_2
         print('Partial loss 1:  %.3f (Conection)  %.3f (Approximation)' % (loss_subterm_connection_value_2, loss_subterm_connection_value_1))
@@ -440,7 +460,10 @@ class NRSfMLoss:
         else:
             max_dists, _ = torch.max(dists, dim=0, keepdim=True)
 
-        loss_amap = torch.sum((dists - max_dists) ** 2)
+        mask_batch = self.mask[frame_indices]
+        neighbor_mask = mask_batch[:, neighbor_indices]
+        weights = mask_batch.unsqueeze(-1) * neighbor_mask
+        loss_amap = torch.sum((dists - max_dists) ** 2 * weights)
 
         return loss_amap
 

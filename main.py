@@ -14,7 +14,10 @@ if "DATASET_NAME" in os.environ:
     
 from Dataset.result_setting import result_params
 from Dataset.load_dataset import load_preprocessed_W,normalized_points_downsample,normalized_points_without_downsample,normalized_points_downsample_load
-from NRSfM_core.train_shape_decoder import train_shape_decoder, train_shape_decoder_GCN
+if dataset_params["dataset_name"].startswith("challenge_dataset/"):
+    from NRSfM_core.train_shape_decoder_challenge import train_shape_decoder, train_shape_decoder_GCN
+else:
+    from NRSfM_core.train_shape_decoder import train_shape_decoder, train_shape_decoder_GCN
 from NRSfM_core.Initial_supervised_learning_DGCN import Initial_supervised_learning_DGCN
 from NRSfM_core.Initial_supervised_learning_multiple_model import Initial_supervised_learning
 from NRSfM_core.Collect_datasets import Collect_data, Initial_learning_from_all_datasets

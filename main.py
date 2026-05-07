@@ -223,7 +223,7 @@ if __name__ == '__main__':
     if args.rebuttal_eval:
         knn_ms = None
         forward_ms = None
-        if torch.cuda.is_available():
+        if device.type == 'cuda':
             num_points = Scene_normalized.shape[1]
             frame_points = np.zeros((1, 3, num_points), dtype=np.float32)
             frame_points[0, 0, :] = Scene_normalized[0, :]
